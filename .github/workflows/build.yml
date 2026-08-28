@@ -1,0 +1,137 @@
+# ==============================================================================
+# GitHub Actions Workflow: Build & Deliver Debug APK
+#
+# Required Repository Secrets (Settings -> Secrets and variables -> Actions):
+# - TELEGRAM_BOT_TOKEN: Telegram Bot API Token obtained from @BotFather
+# - TELEGRAM_CHAT_ID: Target Telegram Chat / Group / Channel ID to receive the APK
+# ==============================================================================
+
+name: Build & Deliver Debug APK
+
+on:
+  push:
+    branches:
+      - main
+      - 'phase-*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Deliver Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      # Extract version from app/build.gradle.kts or VERSION file, get short hash,
+      # and copy the built APK to the standard naming format: cheironomy-<version>-<short-hash>.apk
+      - name: Prepare APK and metadata
+        id: prep
+        run: |
+          # 1. Extract versionName from app/build.gradle.kts, VERSION file, or fallback default
+          VERSION="0.1.0"
+          if [ -f "app/build.gradle.kts" ]; then
+            EXTRACTED_VER=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -n 1 | sed -E 's/.*versionName\s*=\s*"([^"]+)".*/\1/')
+            if [ -n "$EXTRACTED_VER" ]; then
+              VERSION="$EXTRACTED_VER"
+            fi
+          elif [ -f "VERSION" ]; then
+            VERSION=$(cat VERSION | tr -d '[:space:]')
+          fi
+
+          # 2. Get short git commit hash
+          SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "${GITHUB_SHA::7}")
+
+          # 3. Rename/copy APK to target name
+          APK_NAME="cheironomy-${VERSION}-${SHORT_SHA}.apk"
+          SOURCE_APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$SOURCE_APK" ]; then
+            echo "::error::Source APK not found at $SOURCE_APK"
+            exit 1
+          fi
+
+          cp "$SOURCE_APK" "$APK_NAME"
+          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "apk_path=$APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+          # 4. Extract single-line truncated commit message for Telegram caption
+          RAW_MSG=$(git log -1 --pretty=format:'%s' 2>/dev/null || echo "Workflow dispatch / manual run")
+          TRUNCATED_MSG=$(echo "$RAW_MSG" | head -n 1 | cut -c 1-200)
+          echo "commit_msg=$TRUNCATED_MSG" >> "$GITHUB_OUTPUT"
+
+      # Upload the renamed APK as a workflow artifact as a fallback if Telegram delivery fails
+      - name: Upload APK Artifact (Fallback)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.prep.outputs.apk_name }}
+          path: ${{ steps.prep.outputs.apk_path }}
+          retention-days: 14
+
+      # Explicit check step: fail with clear error messages if required Telegram secrets are not set
+      - name: Validate Telegram Secrets
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MISSING_SECRETS=0
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            echo "::error::Missing required secret: TELEGRAM_BOT_TOKEN. Configure it under Settings -> Secrets and variables -> Actions."
+            MISSING_SECRETS=1
+          fi
+          if [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::Missing required secret: TELEGRAM_CHAT_ID. Configure it under Settings -> Secrets and variables -> Actions."
+            MISSING_SECRETS=1
+          fi
+          if [ $MISSING_SECRETS -ne 0 ]; then
+            exit 1
+          fi
+
+      # Send the APK document to Telegram via Bot API sendDocument endpoint using curl.
+      # Secrets are passed securely through environment variables and never logged.
+      - name: Send APK to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APK_PATH: ${{ steps.prep.outputs.apk_path }}
+          SHORT_SHA: ${{ steps.prep.outputs.short_sha }}
+          COMMIT_MSG: ${{ steps.prep.outputs.commit_msg }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          CAPTION="📱 Cheironomy Debug Build
+          👤 Owner: ${REPO_OWNER}
+          🔖 Commit: ${SHORT_SHA}
+          💬 Message: ${COMMIT_MSG}"
+
+          HTTP_RESPONSE=$(curl -s -o /tmp/telegram_response.json -w "%{http_code}" \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "document=@${APK_PATH}" \
+            -F "caption=${CAPTION}")
+
+          if [ "$HTTP_RESPONSE" -ne 200 ]; then
+            echo "::error::Telegram API delivery failed with HTTP status code $HTTP_RESPONSE"
+            cat /tmp/telegram_response.json
+            exit 1
+          fi
+          echo "APK successfully delivered to Telegram."

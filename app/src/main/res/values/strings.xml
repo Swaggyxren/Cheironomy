@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Cheironomy</string>
+    <string name="accessibility_service_label">Cheironomy Gesture Controller</string>
+    <string name="accessibility_service_description">Dispatches touchless gestures (swipes, scrolls, and media controls) to control your device without touching the screen.</string>
+    
+    <!-- Service Notification -->
+    <string name="service_notification_channel_name">Cheironomy Detection Service</string>
+    <string name="service_notification_channel_desc">Shows active status while touchless hand gesture detection is running in the foreground.</string>
+    <string name="service_notification_title">Cheironomy Active</string>
+    <string name="service_notification_text">Hand gesture detection is running in the background.</string>
+    <string name="action_stop_service">Stop Service</string>
+</resources>
