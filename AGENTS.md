@@ -144,7 +144,7 @@ Each phase = one GitHub Issue = one branch = one PR into `main`. Do not combine 
 
 ## 9. CI / Secrets
 
-GitHub Actions builds and delivers a debug APK on every push to `main` and `phase-*` branches (or via manual `workflow_dispatch`).
+GitHub Actions builds and delivers a debug APK on every push to `main` (or via manual `workflow_dispatch`).
 
 - **Required Secrets** (set in `Settings → Secrets and variables → Actions`):
   - `TELEGRAM_BOT_TOKEN`: Telegram Bot API token obtained from `@BotFather`.
