@@ -82,6 +82,7 @@ import com.ydnar.cheironomy.accessibility.CheironomyAccessibilityService
 import com.ydnar.cheironomy.camera.CameraPreview
 import com.ydnar.cheironomy.data.SettingsRepository
 import com.ydnar.cheironomy.gesture.classifier.PoseClassifier
+import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
 import com.ydnar.cheironomy.gesture.model.PoseType
 import com.ydnar.cheironomy.service.CheironomyForegroundService
 import com.ydnar.cheironomy.ui.overlay.HandLandmarkOverlay
