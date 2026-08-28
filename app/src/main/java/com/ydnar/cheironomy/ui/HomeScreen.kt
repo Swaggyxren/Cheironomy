@@ -159,7 +159,7 @@ private fun DashboardTab(
     val isA11yConnected by CheironomyAccessibilityService.isServiceConnected.collectAsStateWithLifecycle()
 
     // Live MediaPipe Detection State
-    var landmarkResult by remember { mutableStateOf<HandLandmarkerResult?>(null) }
+    var landmarkResultBundle by remember { mutableStateOf<HandLandmarkResultBundle?>(null) }
     var inferenceLatencyMs by remember { mutableLongStateOf(0L) }
     var detectedPose by remember { mutableStateOf(PoseType.UNKNOWN) }
 
@@ -311,7 +311,7 @@ private fun DashboardTab(
                     CameraPreview(
                         modifier = Modifier.fillMaxSize(),
                         onLandmarkResults = { bundle ->
-                            landmarkResult = bundle.result
+                            landmarkResultBundle = bundle
                             inferenceLatencyMs = bundle.inferenceTimeMs
                             val allHands = bundle.result?.landmarks()
                             if (allHands != null && allHands.isNotEmpty() && allHands[0].size >= 21) {
@@ -322,10 +322,11 @@ private fun DashboardTab(
                         }
                     )
 
-                    // Real-time skeletal overlay
+                    // Real-time skeletal overlay with exact aspect ratio scaling & front-camera mirror alignment
                     HandLandmarkOverlay(
-                        landmarkResult = landmarkResult,
-                        modifier = Modifier.fillMaxSize()
+                        resultBundle = landmarkResultBundle,
+                        modifier = Modifier.fillMaxSize(),
+                        isFrontCamera = true
                     )
 
                     // Real-time telemetry chips

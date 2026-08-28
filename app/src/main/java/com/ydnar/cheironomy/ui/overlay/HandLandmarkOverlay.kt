@@ -7,7 +7,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
+import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
 
 // Standard MediaPipe Hand Landmark skeleton connections
 private val HAND_CONNECTIONS = listOf(
@@ -28,21 +29,44 @@ private val HAND_CONNECTIONS = listOf(
 private val FINGER_TIPS = setOf(4, 8, 12, 16, 20)
 
 /**
- * Real-time Canvas overlay rendering 21-point hand landmark skeleton.
+ * Real-time Canvas overlay rendering 21-point hand landmark skeleton,
+ * with exact FILL_CENTER aspect ratio scaling and front-camera mirror alignment.
  */
 @Composable
 fun HandLandmarkOverlay(
-    landmarkResult: HandLandmarkerResult?,
+    resultBundle: HandLandmarkResultBundle?,
     modifier: Modifier = Modifier,
+    isFrontCamera: Boolean = true,
     lineColor: Color = Color(0xCC00E5FF),
     jointColor: Color = Color(0xFF00E5FF),
     tipColor: Color = Color(0xFF00E676)
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
-        if (landmarkResult == null || landmarkResult.landmarks().isEmpty()) return@Canvas
+        val bundle = resultBundle ?: return@Canvas
+        val landmarkResult = bundle.result ?: return@Canvas
+        if (landmarkResult.landmarks().isEmpty()) return@Canvas
 
         val canvasWidth = size.width
         val canvasHeight = size.height
+
+        val imgWidth = bundle.inputImageWidth.toFloat().coerceAtLeast(1f)
+        val imgHeight = bundle.inputImageHeight.toFloat().coerceAtLeast(1f)
+
+        // Compute FILL_CENTER scale and offset to match PreviewView
+        val scale = maxOf(canvasWidth / imgWidth, canvasHeight / imgHeight)
+        val scaledWidth = imgWidth * scale
+        val scaledHeight = imgHeight * scale
+        val offsetX = (canvasWidth - scaledWidth) / 2f
+        val offsetY = (canvasHeight - scaledHeight) / 2f
+
+        fun mapPoint(landmark: NormalizedLandmark): Offset {
+            val normalizedX = if (isFrontCamera) (1f - landmark.x()) else landmark.x()
+            val normalizedY = landmark.y()
+
+            val px = normalizedX * scaledWidth + offsetX
+            val py = normalizedY * scaledHeight + offsetY
+            return Offset(px, py)
+        }
 
         for (handLandmarks in landmarkResult.landmarks()) {
             if (handLandmarks.size < 21) continue
@@ -52,14 +76,8 @@ fun HandLandmarkOverlay(
                 val start = handLandmarks[startIdx]
                 val end = handLandmarks[endIdx]
 
-                val startOffset = Offset(
-                    x = start.x() * canvasWidth,
-                    y = start.y() * canvasHeight
-                )
-                val endOffset = Offset(
-                    x = end.x() * canvasWidth,
-                    y = end.y() * canvasHeight
-                )
+                val startOffset = mapPoint(start)
+                val endOffset = mapPoint(end)
 
                 drawLine(
                     color = lineColor,
@@ -72,11 +90,7 @@ fun HandLandmarkOverlay(
 
             // 2. Draw joint dots
             handLandmarks.forEachIndexed { index, landmark ->
-                val center = Offset(
-                    x = landmark.x() * canvasWidth,
-                    y = landmark.y() * canvasHeight
-                )
-
+                val center = mapPoint(landmark)
                 val isTip = index in FINGER_TIPS
                 val radius = if (isTip) 10f else 7f
                 val color = if (isTip) tipColor else jointColor

@@ -93,7 +93,7 @@ class HandLandmarkerHelper(
 
     fun detectLiveStream(
         imageProxy: ImageProxy,
-        isFrontCamera: Boolean
+        isFrontCamera: Boolean = true
     ) {
         if (runningMode != RunningMode.LIVE_STREAM) {
             throw IllegalArgumentException(
@@ -103,19 +103,10 @@ class HandLandmarkerHelper(
 
         val frameTime = SystemClock.uptimeMillis()
 
-        // Convert ImageProxy to rotated Bitmap
-        val bitmapBuffer = Bitmap.createBitmap(
-            imageProxy.width,
-            imageProxy.height,
-            Bitmap.Config.ARGB_8888
-        )
         imageProxy.use {
             val bitmap = imageProxy.toBitmap()
             val matrix = Matrix().apply {
                 postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
-                if (isFrontCamera) {
-                    postScale(-1f, 1f, imageProxy.width.toFloat(), imageProxy.height.toFloat())
-                }
             }
 
             val rotatedBitmap = Bitmap.createBitmap(
