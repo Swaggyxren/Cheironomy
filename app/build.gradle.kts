@@ -55,31 +55,6 @@ android {
     }
 }
 
-// Auto-download MediaPipe hand_landmarker.task if not present
-val downloadHandLandmarkerModel = tasks.register("downloadHandLandmarkerModel") {
-    val modelDir = file("src/main/assets")
-    val modelFile = file("src/main/assets/hand_landmarker.task")
-    outputs.file(modelFile)
-
-    doLast {
-        if (!modelFile.exists()) {
-            modelDir.mkdirs()
-            println("Downloading hand_landmarker.task model...")
-            val modelUrl = java.net.URI("https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task").toURL()
-            modelUrl.openStream().use { input ->
-                modelFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-            println("MediaPipe model downloaded successfully to ${modelFile.path}")
-        }
-    }
-}
-
-tasks.named("preBuild") {
-    dependsOn(downloadHandLandmarkerModel)
-}
-
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
