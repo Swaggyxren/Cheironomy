@@ -70,36 +70,62 @@ class MotionTemplateMatcherTest {
     }
 
     @Test
-    fun testDtwSpeedInvariance() {
-        // Path A: Recorded at 1x speed (fewer raw sample points)
-        val rawSlow = listOf(
-            Point2D(0.1f, 0.1f),
-            Point2D(0.3f, 0.2f),
-            Point2D(0.5f, 0.6f),
-            Point2D(0.7f, 0.8f)
+    fun `test nearest match wins among multiple registered motion templates`() {
+        // Template 1: Rightward Swipe
+        val rightSwipePoints = listOf(
+            Point2D(0.1f, 0.5f),
+            Point2D(0.5f, 0.5f),
+            Point2D(0.9f, 0.5f)
+        )
+        val (normRight, statsRight) = TrajectoryNormalizer.normalizeTrajectory(rightSwipePoints)!!
+        val templateRight = MotionGestureTemplate(
+            id = "motion_right",
+            name = "Swipe Right",
+            action = GestureAction.MEDIA_NEXT,
+            normalizedPoints = normRight,
+            stats = statsRight
         )
 
-        // Path B: Same geometry performed at different speed / frame rate (many sample points)
-        val rawFast = listOf(
-            Point2D(0.1f, 0.1f),
-            Point2D(0.2f, 0.15f),
-            Point2D(0.3f, 0.2f),
-            Point2D(0.4f, 0.4f),
-            Point2D(0.5f, 0.6f),
-            Point2D(0.6f, 0.7f),
-            Point2D(0.7f, 0.8f)
+        // Template 2: Downward Swipe
+        val downSwipePoints = listOf(
+            Point2D(0.5f, 0.1f),
+            Point2D(0.5f, 0.5f),
+            Point2D(0.5f, 0.9f)
+        )
+        val (normDown, statsDown) = TrajectoryNormalizer.normalizeTrajectory(downSwipePoints)!!
+        val templateDown = MotionGestureTemplate(
+            id = "motion_down",
+            name = "Swipe Down",
+            action = GestureAction.SCROLL_DOWN,
+            normalizedPoints = normDown,
+            stats = statsDown
         )
 
-        val normA = TrajectoryNormalizer.normalizeTrajectory(rawSlow)!!
-        val normB = TrajectoryNormalizer.normalizeTrajectory(rawFast)!!
+        val templates = listOf(templateRight, templateDown)
 
-        val dtwDist = MotionTemplateMatcher.computeDtwDistance(normA.first, normB.first)
-        assertTrue("DTW should be small for same shape at different speed, was $dtwDist", dtwDist < 0.08f)
+        // Live candidate matching rightward swipe
+        val liveCandidate = listOf(
+            Point2D(0.15f, 0.48f),
+            Point2D(0.52f, 0.51f),
+            Point2D(0.88f, 0.49f)
+        )
+        val (liveNorm, liveStats) = TrajectoryNormalizer.normalizeTrajectory(liveCandidate)!!
+
+        val match = MotionTemplateMatcher.match(
+            candidateTrajectory = liveNorm,
+            candidateStats = liveStats,
+            templates = templates,
+            rejectCeiling = 0.22f,
+            marginThreshold = 0.15f
+        )
+
+        assertNotNull(match)
+        assertEquals("motion_right", match?.first?.id)
+        assertEquals(GestureAction.MEDIA_NEXT, match?.first?.action)
     }
 
     @Test
-    fun testMatchRecognizesRegisteredMotionTemplate() {
-        // Register an "S-Curve" Motion Template
+    fun `test reject ceiling rejects erratic candidate trajectories`() {
         val sCurveRaw = listOf(
             Point2D(0.1f, 0.1f),
             Point2D(0.3f, 0.4f),
@@ -109,36 +135,68 @@ class MotionTemplateMatcherTest {
         val (normPoints, stats) = TrajectoryNormalizer.normalizeTrajectory(sCurveRaw)!!
         val sCurveTemplate = MotionGestureTemplate(
             id = "scurve_1",
-            name = "S Curve Flick",
+            name = "S Curve",
             action = GestureAction.MEDIA_NEXT,
             normalizedPoints = normPoints,
             stats = stats
         )
 
-        val templates = listOf(sCurveTemplate)
-
-        // 1. Live performance of S-Curve
-        val livePerformance = listOf(
-            Point2D(0.2f, 0.2f),
-            Point2D(0.4f, 0.5f),
-            Point2D(0.2f, 0.8f),
-            Point2D(0.5f, 1.0f)
-        )
-        val (liveNorm, liveStats) = TrajectoryNormalizer.normalizeTrajectory(livePerformance)!!
-
-        val match = MotionTemplateMatcher.match(liveNorm, liveStats, templates, threshold = 0.22f)
-        assertNotNull(match)
-        assertEquals("scurve_1", match!!.first.id)
-        assertEquals(GestureAction.MEDIA_NEXT, match.first.action)
-
-        // 2. Unrelated straight horizontal line should not match
+        // Dissimilar straight horizontal line
         val straightLine = listOf(
             Point2D(0.1f, 0.5f),
             Point2D(0.9f, 0.5f)
         )
         val (straightNorm, straightStats) = TrajectoryNormalizer.normalizeTrajectory(straightLine)!!
 
-        val mismatch = MotionTemplateMatcher.match(straightNorm, straightStats, templates, threshold = 0.22f)
-        assertNull(mismatch)
+        val match = MotionTemplateMatcher.match(
+            candidateTrajectory = straightNorm,
+            candidateStats = straightStats,
+            templates = listOf(sCurveTemplate),
+            rejectCeiling = 0.22f
+        )
+        assertNull("Dissimilar motion exceeding reject ceiling must be rejected", match)
+    }
+
+    @Test
+    fun `test margin check rejects ambiguous candidate between two similar motion templates`() {
+        val baseMotion = listOf(
+            Point2D(0.1f, 0.1f),
+            Point2D(0.3f, 0.3f),
+            Point2D(0.6f, 0.7f),
+            Point2D(0.9f, 0.9f)
+        )
+        val (normA, statsA) = TrajectoryNormalizer.normalizeTrajectory(baseMotion)!!
+        val templateA = MotionGestureTemplate(
+            id = "template_a",
+            name = "Diagonal A",
+            action = GestureAction.SWIPE_RIGHT,
+            normalizedPoints = normA,
+            stats = statsA
+        )
+
+        // Template B is almost identical to Template A
+        val slightlyShifted = baseMotion.map { Point2D(it.x + 0.01f, it.y) }
+        val (normB, statsB) = TrajectoryNormalizer.normalizeTrajectory(slightlyShifted)!!
+        val templateB = MotionGestureTemplate(
+            id = "template_b",
+            name = "Diagonal B",
+            action = GestureAction.SWIPE_LEFT,
+            normalizedPoints = normB,
+            stats = statsB
+        )
+
+        // Live candidate between A and B
+        val candidate = baseMotion.map { Point2D(it.x + 0.005f, it.y) }
+        val (candNorm, candStats) = TrajectoryNormalizer.normalizeTrajectory(candidate)!!
+
+        val match = MotionTemplateMatcher.match(
+            candidateTrajectory = candNorm,
+            candidateStats = candStats,
+            templates = listOf(templateA, templateB),
+            rejectCeiling = 0.22f,
+            marginThreshold = 0.20f // 20% margin required
+        )
+
+        assertNull("Ambiguous candidate with margin < 20% must be rejected", match)
     }
 }

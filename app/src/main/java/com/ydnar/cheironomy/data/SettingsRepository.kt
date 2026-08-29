@@ -22,29 +22,16 @@ class SettingsRepository(context: Context) {
         val templates = GestureTemplate.listFromJson(templatesJson)
 
         return AppSettings(
-            confidenceThreshold = prefs.getFloat(KEY_CONFIDENCE, 0.5f),
-            cooldownMs = prefs.getLong(KEY_COOLDOWN_MS, 1200L),
+            confidenceThreshold = prefs.getFloat(KEY_CONFIDENCE, 0.65f),
             holdDurationMs = prefs.getLong(KEY_HOLD_DURATION_MS, 500L),
-            swipeSensitivity = prefs.getFloat(KEY_SWIPE_SENSITIVITY, 0.22f),
             isOverlayEnabled = prefs.getBoolean(KEY_OVERLAY_ENABLED, true),
-            motionMatchThreshold = prefs.getFloat(KEY_MOTION_MATCH_THRESHOLD, 0.22f),
-            staticMatchThreshold = prefs.getFloat(KEY_STATIC_MATCH_THRESHOLD, 0.16f),
-            openPalmAction = getAction(KEY_ACTION_OPEN_PALM, GestureAction.MEDIA_PLAY_PAUSE),
-            swipeLeftAction = getAction(KEY_ACTION_SWIPE_LEFT, GestureAction.SWIPE_LEFT),
-            swipeRightAction = getAction(KEY_ACTION_SWIPE_RIGHT, GestureAction.SWIPE_RIGHT),
-            swipeUpAction = getAction(KEY_ACTION_SWIPE_UP, GestureAction.SCROLL_DOWN),
-            swipeDownAction = getAction(KEY_ACTION_SWIPE_DOWN, GestureAction.SCROLL_UP),
+            staticRejectCeiling = prefs.getFloat(KEY_STATIC_REJECT_CEILING, 0.18f),
+            staticMarginThreshold = prefs.getFloat(KEY_STATIC_MARGIN_THRESHOLD, 0.15f),
+            motionRejectCeiling = prefs.getFloat(KEY_MOTION_REJECT_CEILING, 0.22f),
+            motionMarginThreshold = prefs.getFloat(KEY_MOTION_MARGIN_THRESHOLD, 0.15f),
+            motionPrefilterTolerance = prefs.getFloat(KEY_MOTION_PREFILTER_TOLERANCE, 0.40f),
             customTemplates = templates
         )
-    }
-
-    private fun getAction(key: String, default: GestureAction): GestureAction {
-        val name = prefs.getString(key, null) ?: return default
-        return try {
-            GestureAction.valueOf(name)
-        } catch (e: Exception) {
-            default
-        }
     }
 
     fun updateConfidenceThreshold(value: Float) {
@@ -52,19 +39,9 @@ class SettingsRepository(context: Context) {
         _settings.value = _settings.value.copy(confidenceThreshold = value)
     }
 
-    fun updateCooldownMs(value: Long) {
-        prefs.edit().putLong(KEY_COOLDOWN_MS, value).apply()
-        _settings.value = _settings.value.copy(cooldownMs = value)
-    }
-
     fun updateHoldDurationMs(value: Long) {
         prefs.edit().putLong(KEY_HOLD_DURATION_MS, value).apply()
         _settings.value = _settings.value.copy(holdDurationMs = value)
-    }
-
-    fun updateSwipeSensitivity(value: Float) {
-        prefs.edit().putFloat(KEY_SWIPE_SENSITIVITY, value).apply()
-        _settings.value = _settings.value.copy(swipeSensitivity = value)
     }
 
     fun updateOverlayEnabled(value: Boolean) {
@@ -72,19 +49,33 @@ class SettingsRepository(context: Context) {
         _settings.value = _settings.value.copy(isOverlayEnabled = value)
     }
 
-    fun updateMotionMatchThreshold(value: Float) {
-        prefs.edit().putFloat(KEY_MOTION_MATCH_THRESHOLD, value).apply()
-        _settings.value = _settings.value.copy(motionMatchThreshold = value)
+    fun updateStaticRejectCeiling(value: Float) {
+        prefs.edit().putFloat(KEY_STATIC_REJECT_CEILING, value).apply()
+        _settings.value = _settings.value.copy(staticRejectCeiling = value)
     }
 
-    fun updateStaticMatchThreshold(value: Float) {
-        prefs.edit().putFloat(KEY_STATIC_MATCH_THRESHOLD, value).apply()
-        _settings.value = _settings.value.copy(staticMatchThreshold = value)
+    fun updateStaticMarginThreshold(value: Float) {
+        prefs.edit().putFloat(KEY_STATIC_MARGIN_THRESHOLD, value).apply()
+        _settings.value = _settings.value.copy(staticMarginThreshold = value)
+    }
+
+    fun updateMotionRejectCeiling(value: Float) {
+        prefs.edit().putFloat(KEY_MOTION_REJECT_CEILING, value).apply()
+        _settings.value = _settings.value.copy(motionRejectCeiling = value)
+    }
+
+    fun updateMotionMarginThreshold(value: Float) {
+        prefs.edit().putFloat(KEY_MOTION_MARGIN_THRESHOLD, value).apply()
+        _settings.value = _settings.value.copy(motionMarginThreshold = value)
+    }
+
+    fun updateMotionPrefilterTolerance(value: Float) {
+        prefs.edit().putFloat(KEY_MOTION_PREFILTER_TOLERANCE, value).apply()
+        _settings.value = _settings.value.copy(motionPrefilterTolerance = value)
     }
 
     fun addCustomTemplate(template: GestureTemplate) {
         val currentList = _settings.value.customTemplates.toMutableList()
-        // Remove existing with same id if replacing
         currentList.removeAll { it.id == template.id }
         currentList.add(template)
         saveTemplates(currentList)
@@ -102,35 +93,18 @@ class SettingsRepository(context: Context) {
         _settings.value = _settings.value.copy(customTemplates = templates)
     }
 
-    fun updateAction(key: String, action: GestureAction) {
-        prefs.edit().putString(key, action.name).apply()
-        _settings.value = when (key) {
-            KEY_ACTION_OPEN_PALM -> _settings.value.copy(openPalmAction = action)
-            KEY_ACTION_SWIPE_LEFT -> _settings.value.copy(swipeLeftAction = action)
-            KEY_ACTION_SWIPE_RIGHT -> _settings.value.copy(swipeRightAction = action)
-            KEY_ACTION_SWIPE_UP -> _settings.value.copy(swipeUpAction = action)
-            KEY_ACTION_SWIPE_DOWN -> _settings.value.copy(swipeDownAction = action)
-            else -> _settings.value
-        }
-    }
-
     companion object {
         private const val PREFS_NAME = "cheironomy_settings_prefs"
 
         const val KEY_CONFIDENCE = "key_confidence"
-        const val KEY_COOLDOWN_MS = "key_cooldown_ms"
         const val KEY_HOLD_DURATION_MS = "key_hold_duration_ms"
-        const val KEY_SWIPE_SENSITIVITY = "key_swipe_sensitivity"
         const val KEY_OVERLAY_ENABLED = "key_overlay_enabled"
-        const val KEY_MOTION_MATCH_THRESHOLD = "key_motion_match_threshold"
-        const val KEY_STATIC_MATCH_THRESHOLD = "key_static_match_threshold"
+        const val KEY_STATIC_REJECT_CEILING = "key_static_reject_ceiling"
+        const val KEY_STATIC_MARGIN_THRESHOLD = "key_static_margin_threshold"
+        const val KEY_MOTION_REJECT_CEILING = "key_motion_reject_ceiling"
+        const val KEY_MOTION_MARGIN_THRESHOLD = "key_motion_margin_threshold"
+        const val KEY_MOTION_PREFILTER_TOLERANCE = "key_motion_prefilter_tolerance"
         const val KEY_CUSTOM_TEMPLATES = "key_custom_templates"
-
-        const val KEY_ACTION_OPEN_PALM = "key_action_open_palm"
-        const val KEY_ACTION_SWIPE_LEFT = "key_action_swipe_left"
-        const val KEY_ACTION_SWIPE_RIGHT = "key_action_swipe_right"
-        const val KEY_ACTION_SWIPE_UP = "key_action_swipe_up"
-        const val KEY_ACTION_SWIPE_DOWN = "key_action_swipe_down"
 
         @Volatile
         private var instance: SettingsRepository? = null

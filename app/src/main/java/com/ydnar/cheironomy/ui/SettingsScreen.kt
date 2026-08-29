@@ -5,9 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,26 +16,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Gesture
-import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -51,18 +42,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.ydnar.cheironomy.data.GestureAction
 import com.ydnar.cheironomy.data.SettingsRepository
 import com.ydnar.cheironomy.data.template.GestureTemplate
 import com.ydnar.cheironomy.data.template.GestureTemplate.MotionGestureTemplate
-import com.ydnar.cheironomy.data.template.GestureTemplate.StaticGestureTemplate
 import com.ydnar.cheironomy.ui.components.TrajectoryThumbnail
 import com.ydnar.cheironomy.ui.recording.GestureRecordingDialog
 import com.ydnar.cheironomy.ui.theme.CardBackground
@@ -94,14 +82,14 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Section 1: Custom Gestures Management
+        // Section 1: User-Recorded Custom Gestures
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Custom Gestures",
+                text = "My Recorded Gestures",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = Color.White
             )
@@ -137,13 +125,14 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "No custom gestures recorded yet",
+                        text = "No gestures recorded yet",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.LightGray,
                         fontWeight = FontWeight.SemiBold
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Record a custom swipe/motion shape or static hand pose to trigger any action.",
+                        text = "Cheironomy uses pure user templates. Record your first motion or static pose above!",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -163,14 +152,14 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Section 2: Sensitivity & Timings
+        // Section 2: Nearest-Neighbor Recognition & Thresholds
         Text(
-            text = "Gesture Sensitivity & Timings",
+            text = "Recognition Tuning (Nearest-Neighbor)",
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
             color = Color.White
         )
 
-        // 1. Detection Confidence Threshold Slider
+        // 1. Detection Confidence Threshold
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -182,7 +171,7 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Detection Confidence",
+                        text = "Hand Detection Confidence",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = Color.White
                     )
@@ -193,7 +182,7 @@ fun SettingsScreen(
                     )
                 }
                 Text(
-                    text = "Lower values improve detection in harsh outdoor sunlight or dusk.",
+                    text = "Minimum MediaPipe confidence required before evaluating gestures.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.LightGray
                 )
@@ -210,7 +199,7 @@ fun SettingsScreen(
             }
         }
 
-        // 2. Custom Motion Match Sensitivity (DTW)
+        // 2. Motion DTW Reject Ceiling
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -222,24 +211,24 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Custom Motion Sensitivity (DTW)",
+                        text = "Motion Reject Ceiling (DTW)",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = Color.White
                     )
                     Text(
-                        text = "${(settings.motionMatchThreshold * 100).toInt()}%",
+                        text = String.format("%.2f", settings.motionRejectCeiling),
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                         color = PrimaryTeal
                     )
                 }
                 Text(
-                    text = "Controls shape tolerance for matching user-recorded motion paths.",
+                    text = "Maximum DTW path distance to accept a match; larger values allow looser motion shapes.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.LightGray
                 )
                 Slider(
-                    value = settings.motionMatchThreshold,
-                    onValueChange = { settingsRepo.updateMotionMatchThreshold(it) },
+                    value = settings.motionRejectCeiling,
+                    onValueChange = { settingsRepo.updateMotionRejectCeiling(it) },
                     valueRange = 0.10f..0.40f,
                     steps = 14,
                     colors = SliderDefaults.colors(
@@ -250,7 +239,7 @@ fun SettingsScreen(
             }
         }
 
-        // 3. Custom Static Pose Match Sensitivity
+        // 3. Motion Winner Margin
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -262,26 +251,26 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Custom Static Pose Tolerance",
+                        text = "Motion Runner-Up Margin",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = Color.White
                     )
                     Text(
-                        text = "${(settings.staticMatchThreshold * 100).toInt()}%",
+                        text = "${(settings.motionMarginThreshold * 100).toInt()}%",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                         color = PrimaryTeal
                     )
                 }
                 Text(
-                    text = "Controls Euclidean tolerance when matching custom recorded poses.",
+                    text = "Winner must be at least this much closer than the runner-up template to resolve ambiguity.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.LightGray
                 )
                 Slider(
-                    value = settings.staticMatchThreshold,
-                    onValueChange = { settingsRepo.updateStaticMatchThreshold(it) },
-                    valueRange = 0.08f..0.30f,
-                    steps = 10,
+                    value = settings.motionMarginThreshold,
+                    onValueChange = { settingsRepo.updateMotionMarginThreshold(it) },
+                    valueRange = 0.05f..0.35f,
+                    steps = 6,
                     colors = SliderDefaults.colors(
                         thumbColor = PrimaryTeal,
                         activeTrackColor = PrimaryTeal
@@ -290,7 +279,7 @@ fun SettingsScreen(
             }
         }
 
-        // 4. Cooldown Debounce Window
+        // 4. Static Pose Reject Ceiling
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -302,26 +291,26 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Action Cooldown (Debounce)",
+                        text = "Static Pose Reject Ceiling",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = Color.White
                     )
                     Text(
-                        text = "${String.format("%.1f", settings.cooldownMs / 1000f)} s",
+                        text = String.format("%.2f", settings.staticRejectCeiling),
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                         color = PrimaryTeal
                     )
                 }
                 Text(
-                    text = "Prevents accidental duplicate triggers within the cooldown window.",
+                    text = "Maximum mean Euclidean landmark distance for held pose recognition.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.LightGray
                 )
                 Slider(
-                    value = settings.cooldownMs.toFloat(),
-                    onValueChange = { settingsRepo.updateCooldownMs(it.toLong()) },
-                    valueRange = 500f..3000f,
-                    steps = 24,
+                    value = settings.staticRejectCeiling,
+                    onValueChange = { settingsRepo.updateStaticRejectCeiling(it) },
+                    valueRange = 0.08f..0.32f,
+                    steps = 12,
                     colors = SliderDefaults.colors(
                         thumbColor = PrimaryTeal,
                         activeTrackColor = PrimaryTeal
@@ -330,7 +319,47 @@ fun SettingsScreen(
             }
         }
 
-        // 5. Static Pose Hold Duration
+        // 5. Static Pose Margin
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = CardBackground)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Static Pose Runner-Up Margin",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = Color.White
+                    )
+                    Text(
+                        text = "${(settings.staticMarginThreshold * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = PrimaryTeal
+                    )
+                }
+                Text(
+                    text = "Winner must beat second closest static pose by this percentage margin.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray
+                )
+                Slider(
+                    value = settings.staticMarginThreshold,
+                    onValueChange = { settingsRepo.updateStaticMarginThreshold(it) },
+                    valueRange = 0.05f..0.35f,
+                    steps = 6,
+                    colors = SliderDefaults.colors(
+                        thumbColor = PrimaryTeal,
+                        activeTrackColor = PrimaryTeal
+                    )
+                )
+            }
+        }
+
+        // 6. Static Pose Hold Duration
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -362,46 +391,6 @@ fun SettingsScreen(
                     onValueChange = { settingsRepo.updateHoldDurationMs(it.toLong()) },
                     valueRange = 300f..1500f,
                     steps = 11,
-                    colors = SliderDefaults.colors(
-                        thumbColor = PrimaryTeal,
-                        activeTrackColor = PrimaryTeal
-                    )
-                )
-            }
-        }
-
-        // 6. Swipe Sensitivity Threshold
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = CardBackground)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Built-in Swipe Distance Sensitivity",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = Color.White
-                    )
-                    Text(
-                        text = "${(settings.swipeSensitivity * 100).toInt()}%",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                        color = PrimaryTeal
-                    )
-                }
-                Text(
-                    text = "Lower values require smaller hand movement across the camera frame.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.LightGray
-                )
-                Slider(
-                    value = settings.swipeSensitivity,
-                    onValueChange = { settingsRepo.updateSwipeSensitivity(it) },
-                    valueRange = 0.12f..0.40f,
-                    steps = 13,
                     colors = SliderDefaults.colors(
                         thumbColor = PrimaryTeal,
                         activeTrackColor = PrimaryTeal
@@ -455,45 +444,6 @@ fun SettingsScreen(
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Section 3: Built-in Gesture Remapping
-        Text(
-            text = "Built-in Gesture Actions",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = Color.White
-        )
-
-        ActionMappingDropdown(
-            label = "Open Palm Held",
-            selectedAction = settings.openPalmAction,
-            onActionSelected = { settingsRepo.updateAction(SettingsRepository.KEY_ACTION_OPEN_PALM, it) }
-        )
-
-        ActionMappingDropdown(
-            label = "Swipe Left",
-            selectedAction = settings.swipeLeftAction,
-            onActionSelected = { settingsRepo.updateAction(SettingsRepository.KEY_ACTION_SWIPE_LEFT, it) }
-        )
-
-        ActionMappingDropdown(
-            label = "Swipe Right",
-            selectedAction = settings.swipeRightAction,
-            onActionSelected = { settingsRepo.updateAction(SettingsRepository.KEY_ACTION_SWIPE_RIGHT, it) }
-        )
-
-        ActionMappingDropdown(
-            label = "Swipe Up",
-            selectedAction = settings.swipeUpAction,
-            onActionSelected = { settingsRepo.updateAction(SettingsRepository.KEY_ACTION_SWIPE_UP, it) }
-        )
-
-        ActionMappingDropdown(
-            label = "Swipe Down",
-            selectedAction = settings.swipeDownAction,
-            onActionSelected = { settingsRepo.updateAction(SettingsRepository.KEY_ACTION_SWIPE_DOWN, it) }
-        )
 
         Spacer(modifier = Modifier.height(24.dp))
     }
@@ -561,67 +511,6 @@ private fun CustomGestureItemCard(
 
             IconButton(onClick = onDelete) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete Gesture", tint = StatusRed.copy(alpha = 0.8f))
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ActionMappingDropdown(
-    label: String,
-    selectedAction: GestureAction,
-    onActionSelected: (GestureAction) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBackground)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                color = PrimaryTeal
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = !expanded }
-            ) {
-                OutlinedTextField(
-                    value = selectedAction.displayName,
-                    onValueChange = {},
-                    readOnly = true,
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = PrimaryTeal,
-                        unfocusedBorderColor = Color.DarkGray
-                    ),
-                    modifier = Modifier
-                        .menuAnchor()
-                        .fillMaxWidth()
-                )
-
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    GestureAction.values().forEach { action ->
-                        DropdownMenuItem(
-                            text = { Text(action.displayName) },
-                            onClick = {
-                                onActionSelected(action)
-                                expanded = false
-                            }
-                        )
-                    }
-                }
             }
         }
     }

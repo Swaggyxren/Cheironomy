@@ -6,17 +6,14 @@ import com.ydnar.cheironomy.data.AppSettings
 import com.ydnar.cheironomy.data.template.GestureTemplate.MotionGestureTemplate
 import com.ydnar.cheironomy.data.template.GestureTemplate.StaticGestureTemplate
 import com.ydnar.cheironomy.data.template.Point2D
-import com.ydnar.cheironomy.gesture.classifier.MotionDeltaTracker
+import com.ydnar.cheironomy.gesture.classifier.PalmCentroidHelper
 import com.ydnar.cheironomy.gesture.classifier.MotionTemplateMatcher
-import com.ydnar.cheironomy.gesture.classifier.MotionTrackerState
-import com.ydnar.cheironomy.gesture.classifier.PoseClassifier
 import com.ydnar.cheironomy.gesture.classifier.StaticTemplateMatcher
 import com.ydnar.cheironomy.gesture.classifier.TrajectoryNormalizer
 import com.ydnar.cheironomy.gesture.filter.OneEuroFilter2D
 import com.ydnar.cheironomy.gesture.filter.OneEuroFilterLandmarks
 import com.ydnar.cheironomy.gesture.model.GestureEvent
 import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
-import com.ydnar.cheironomy.gesture.model.PoseType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -26,6 +23,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
  * State machine for gesture lifecycle.
@@ -43,7 +42,7 @@ enum class GestureState {
 enum class GestureEngineStatus {
     SCANNING,           // No hand detected
     WARMING_UP,         // Re-acquisition debounce (ignoring initial jump frames)
-    IDLE,               // Hand detected and ready
+    IDLE,               // Hand detected and ready (or no templates registered)
     HOLDING,            // Holding a static pose
     TRACKING,           // Tracking motion gesture
     RECOGNIZED          // Gesture action fired
@@ -51,7 +50,8 @@ enum class GestureEngineStatus {
 
 /**
  * Central gesture engine coordinating One Euro Filter signal smoothing,
- * explicit gesture lifecycle state machine, confidence gating, and DTW matching.
+ * explicit gesture lifecycle state machine, confidence gating, and Nearest-Neighbor DTW/Euclidean matching.
+ * Exclusively recognizes user-recorded custom templates.
  */
 class GestureEngine(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default),
@@ -67,8 +67,8 @@ class GestureEngine(
     private val _gestureState = MutableStateFlow(GestureState.IDLE)
     val gestureState: StateFlow<GestureState> = _gestureState.asStateFlow()
 
-    private val _currentPose = MutableStateFlow(PoseType.UNKNOWN)
-    val currentPose: StateFlow<PoseType> = _currentPose.asStateFlow()
+    private val _recognizedGestureName = MutableStateFlow<String?>(null)
+    val recognizedGestureName: StateFlow<String?> = _recognizedGestureName.asStateFlow()
 
     // Real-time telemetry for diagnostics overlay and filter inspection
     private val _telemetryConfidence = MutableStateFlow(0f)
@@ -79,9 +79,6 @@ class GestureEngine(
 
     private val _telemetryFilteredCentroid = MutableStateFlow(Point2D(0f, 0f))
     val telemetryFilteredCentroid: StateFlow<Point2D> = _telemetryFilteredCentroid.asStateFlow()
-
-    private val _telemetryTrackerState = MutableStateFlow(MotionTrackerState.IDLE)
-    val telemetryTrackerState: StateFlow<MotionTrackerState> = _telemetryTrackerState.asStateFlow()
 
     private val _telemetryDeltaX = MutableStateFlow(0f)
     val telemetryDeltaX: StateFlow<Float> = _telemetryDeltaX.asStateFlow()
@@ -99,26 +96,25 @@ class GestureEngine(
     val oneEuroCentroidFilter = OneEuroFilter2D(minCutoff = 1.0f, beta = 0.007f)
     val oneEuroLandmarksFilter = OneEuroFilterLandmarks(minCutoff = 1.0f, beta = 0.007f)
 
-    val motionTracker = MotionDeltaTracker(triggerThreshold = settings.swipeSensitivity)
-
     // Timestamped trajectory buffer for custom motion matching
     private data class TimedCentroid(val point: Point2D, val timestampMs: Long)
     private val motionBuffer = ArrayDeque<TimedCentroid>()
     private var lastMotionCheckTimeMs: Long = 0L
 
-    private var poseStartTimeMs: Long = 0L
-    private var lastTriggerTimeMs: Long = 0L
-    private var activePose: PoseType = PoseType.UNKNOWN
+    // Anchor centroid when motion stroke begins
+    private var motionAnchorPoint: Point2D? = null
+    private var motionAnchorTimeMs: Long = 0L
+    private var isMotionTrackingActive: Boolean = false
 
     private var activeStaticTemplateId: String? = null
     private var staticTemplateStartTimeMs: Long = 0L
+    private var lastTriggerTimeMs: Long = 0L
 
     // Re-acquisition debounce counter (ignoring first 4 frames on hand entry)
     private var consecutiveHandFrames: Int = 0
 
     fun updateSettings(newSettings: AppSettings) {
         settings = newSettings
-        motionTracker.triggerThreshold = newSettings.swipeSensitivity
     }
 
     fun processFrame(resultBundle: HandLandmarkResultBundle) {
@@ -140,13 +136,13 @@ class GestureEngine(
             // Hand was lost or confidence dropped: immediately reset state machine to IDLE
             resetToIdleState()
             _status.value = GestureEngineStatus.SCANNING
-            _currentPose.value = PoseType.UNKNOWN
+            _recognizedGestureName.value = null
             return
         }
 
         consecutiveHandFrames++
         val rawLandmarks = allLandmarks[0]
-        val (rawCentroidX, rawCentroidY) = PoseClassifier.calculatePalmCentroid(rawLandmarks)
+        val (rawCentroidX, rawCentroidY) = PalmCentroidHelper.calculatePalmCentroid(rawLandmarks)
         _telemetryRawCentroid.value = Point2D(rawCentroidX, rawCentroidY)
 
         // 2. Apply One Euro Filter immediately on raw landmarks and centroid
@@ -159,92 +155,83 @@ class GestureEngine(
         if (consecutiveHandFrames <= WARMUP_FRAMES) {
             _status.value = GestureEngineStatus.WARMING_UP
             _gestureState.value = GestureState.IDLE
-            _currentPose.value = PoseType.UNKNOWN
+            _recognizedGestureName.value = null
             motionBuffer.clear()
             motionBuffer.addLast(TimedCentroid(filteredCentroidPoint, now))
-            motionTracker.clear()
-            _telemetryTrackerState.value = motionTracker.state
+            motionAnchorPoint = filteredCentroidPoint
+            motionAnchorTimeMs = now
             return
         }
 
         // 4. Rate-Limit Safety Backstop Check (prevents physical double-fire only)
         val inSafetyWindow = (now - lastTriggerTimeMs < SAFETY_RATE_LIMIT_MS)
 
-        // 5. Static Pose Classification (Custom Templates + Built-in Poses)
+        // 5. Static Pose Classification (Nearest-Neighbor match among registered StaticGestureTemplates)
         val staticTemplates = settings.customTemplates.filterIsInstance<StaticGestureTemplate>()
         val staticMatch = if (staticTemplates.isNotEmpty()) {
             StaticTemplateMatcher.match(
                 landmarks = filteredLandmarks,
                 templates = staticTemplates,
-                threshold = settings.staticMatchThreshold
+                rejectCeiling = settings.staticRejectCeiling,
+                marginThreshold = settings.staticMarginThreshold
             )
         } else null
 
-        val classifiedPose = if (staticMatch == null) {
-            PoseClassifier.classifyPose(filteredLandmarks)
-        } else PoseType.UNKNOWN
-
-        _currentPose.value = classifiedPose
-
-        val isAnyStaticPoseActive = (staticMatch != null || classifiedPose != PoseType.UNKNOWN)
-
-        if (isAnyStaticPoseActive) {
-            // Static Pose Holding State
-            if (staticMatch != null) {
-                val (template, _) = staticMatch
-                if (template.id == activeStaticTemplateId) {
-                    val heldDuration = now - staticTemplateStartTimeMs
-                    if (heldDuration >= settings.holdDurationMs && !inSafetyWindow) {
-                        dispatchRecognizedAction(GestureEvent.CustomGestureTriggered(template), now)
-                        return
-                    }
-                    _gestureState.value = GestureState.HOLDING
-                    _status.value = GestureEngineStatus.HOLDING
-                } else {
-                    activeStaticTemplateId = template.id
-                    staticTemplateStartTimeMs = now
-                    _gestureState.value = GestureState.HOLDING
-                    _status.value = GestureEngineStatus.HOLDING
+        if (staticMatch != null) {
+            val (template, dist) = staticMatch
+            if (template.id == activeStaticTemplateId) {
+                val heldDuration = now - staticTemplateStartTimeMs
+                if (heldDuration >= settings.holdDurationMs && !inSafetyWindow) {
+                    dispatchRecognizedAction(GestureEvent.CustomGestureTriggered(template), now)
+                    return
                 }
-            } else if (classifiedPose != PoseType.UNKNOWN) {
-                if (classifiedPose == activePose) {
-                    val heldDuration = now - poseStartTimeMs
-                    if (heldDuration >= settings.holdDurationMs && !inSafetyWindow) {
-                        dispatchRecognizedAction(GestureEvent.StaticPoseHeld(classifiedPose, heldDuration), now)
-                        return
-                    }
-                    _gestureState.value = GestureState.HOLDING
-                    _status.value = GestureEngineStatus.HOLDING
-                } else {
-                    activePose = classifiedPose
-                    poseStartTimeMs = now
-                    _gestureState.value = GestureState.HOLDING
-                    _status.value = GestureEngineStatus.HOLDING
-                }
+                _gestureState.value = GestureState.HOLDING
+                _status.value = GestureEngineStatus.HOLDING
+                _recognizedGestureName.value = template.name
+            } else {
+                activeStaticTemplateId = template.id
+                staticTemplateStartTimeMs = now
+                _gestureState.value = GestureState.HOLDING
+                _status.value = GestureEngineStatus.HOLDING
+                _recognizedGestureName.value = template.name
             }
 
-            // Clear motion buffer while holding a static pose to prevent cross-contamination
+            // Clear motion tracking while holding static pose
             motionBuffer.clear()
-            motionTracker.clear()
-            _telemetryTrackerState.value = motionTracker.state
+            motionAnchorPoint = filteredCentroidPoint
+            motionAnchorTimeMs = now
+            isMotionTrackingActive = false
+            _telemetryDeltaX.value = 0f
+            _telemetryDeltaY.value = 0f
+            _telemetryVelocity.value = 0f
             return
         } else {
-            // Pose broken / released: transition from HOLDING back to IDLE immediately
+            // Pose broken / released: transition from HOLDING back to IDLE immediately with 0 delay
             if (_gestureState.value == GestureState.HOLDING) {
                 _gestureState.value = GestureState.IDLE
                 _status.value = GestureEngineStatus.IDLE
+                _recognizedGestureName.value = null
             }
-            activePose = PoseType.UNKNOWN
-            poseStartTimeMs = 0L
             activeStaticTemplateId = null
+            staticTemplateStartTimeMs = 0L
         }
 
-        // 6. Motion Delta Tracking & Gesture Recognition
-        val swipeEvent = motionTracker.processCentroid(filteredCentroidX, filteredCentroidY, now)
-        _telemetryTrackerState.value = motionTracker.state
-        _telemetryDeltaX.value = motionTracker.currentDeltaX
-        _telemetryDeltaY.value = motionTracker.currentDeltaY
-        _telemetryVelocity.value = motionTracker.currentVelocity
+        // 6. Motion Delta Tracking & Nearest-Neighbor DTW Template Recognition
+        if (motionAnchorPoint == null) {
+            motionAnchorPoint = filteredCentroidPoint
+            motionAnchorTimeMs = now
+        }
+
+        val anchor = motionAnchorPoint!!
+        val dx = filteredCentroidX - anchor.x
+        val dy = filteredCentroidY - anchor.y
+        val displacement = hypot(dx, dy)
+        val dtSec = ((now - motionAnchorTimeMs) / 1000f).coerceAtLeast(0.01f)
+        val velocity = displacement / dtSec
+
+        _telemetryDeltaX.value = dx
+        _telemetryDeltaY.value = dy
+        _telemetryVelocity.value = velocity
 
         // Append to rolling motion buffer
         motionBuffer.addLast(TimedCentroid(filteredCentroidPoint, now))
@@ -252,13 +239,14 @@ class GestureEngine(
             motionBuffer.removeFirst()
         }
 
-        // Check if motion is active (TRACKING state)
-        if (motionTracker.state == MotionTrackerState.TRACKING) {
+        val motionTemplates = settings.customTemplates.filterIsInstance<MotionGestureTemplate>()
+
+        if (displacement >= MOTION_START_THRESHOLD) {
+            isMotionTrackingActive = true
             _gestureState.value = GestureState.TRACKING
             _status.value = GestureEngineStatus.TRACKING
 
-            // Evaluate Custom Motion Templates
-            val motionTemplates = settings.customTemplates.filterIsInstance<MotionGestureTemplate>()
+            // Evaluate registered custom motion templates via Nearest-Neighbor DTW
             if (motionTemplates.isNotEmpty() && (now - lastMotionCheckTimeMs > 80L)) {
                 lastMotionCheckTimeMs = now
                 val matchedTemplate = evaluateMotionBuffer(motionTemplates)
@@ -267,20 +255,21 @@ class GestureEngine(
                     return
                 }
             }
-
-            // Evaluate Directional Swipes
-            if (swipeEvent != null && !inSafetyWindow) {
-                dispatchRecognizedAction(swipeEvent, now)
-                return
-            }
-        } else if (swipeEvent != null && !inSafetyWindow) {
-            // Direct swipe threshold cross
-            dispatchRecognizedAction(swipeEvent, now)
-            return
-        } else {
-            // Motion decayed back to resting state -> IDLE
+        } else if (isMotionTrackingActive && displacement < MOTION_DECAY_THRESHOLD) {
+            // Motion decayed back below threshold -> return to IDLE immediately
+            isMotionTrackingActive = false
+            motionAnchorPoint = filteredCentroidPoint
+            motionAnchorTimeMs = now
             _gestureState.value = GestureState.IDLE
             _status.value = GestureEngineStatus.IDLE
+            _recognizedGestureName.value = null
+        } else if (!isMotionTrackingActive) {
+            // Update resting anchor
+            motionAnchorPoint = filteredCentroidPoint
+            motionAnchorTimeMs = now
+            _gestureState.value = GestureState.IDLE
+            _status.value = GestureEngineStatus.IDLE
+            _recognizedGestureName.value = null
         }
     }
 
@@ -291,14 +280,15 @@ class GestureEngine(
         val normResult = TrajectoryNormalizer.normalizeTrajectory(points) ?: return null
         val (normalizedPoints, stats) = normResult
 
-        // Only evaluate if there is meaningful path length (> 0.08 normalized screen space)
         if (stats.totalPathLength < 0.08f) return null
 
         val match = MotionTemplateMatcher.match(
             candidateTrajectory = normalizedPoints,
             candidateStats = stats,
             templates = templates,
-            threshold = settings.motionMatchThreshold
+            rejectCeiling = settings.motionRejectCeiling,
+            marginThreshold = settings.motionMarginThreshold,
+            prefilterTolerance = settings.motionPrefilterTolerance
         )
 
         return match?.first
@@ -309,16 +299,23 @@ class GestureEngine(
         _gestureState.value = GestureState.RECOGNIZED
         _status.value = GestureEngineStatus.RECOGNIZED
 
+        val templateName = when (event) {
+            is GestureEvent.CustomGestureTriggered -> event.template.name
+        }
+        _recognizedGestureName.value = templateName
+
         // Reset tracking buffers
-        poseStartTimeMs = 0L
-        activePose = PoseType.UNKNOWN
         activeStaticTemplateId = null
-        motionTracker.clear()
+        staticTemplateStartTimeMs = 0L
+        isMotionTrackingActive = false
         motionBuffer.clear()
-        _telemetryTrackerState.value = motionTracker.state
+        motionAnchorPoint = null
+        _telemetryDeltaX.value = 0f
+        _telemetryDeltaY.value = 0f
+        _telemetryVelocity.value = 0f
 
         scope.launch {
-            Log.i(TAG, "Recognized and dispatched GestureEvent: $event")
+            Log.i(TAG, "Recognized and dispatched GestureEvent: $event ($templateName)")
             _gestureEvents.emit(event)
         }
     }
@@ -328,12 +325,12 @@ class GestureEngine(
         oneEuroCentroidFilter.reset()
         oneEuroLandmarksFilter.reset()
         motionBuffer.clear()
-        motionTracker.clear()
-        poseStartTimeMs = 0L
-        activePose = PoseType.UNKNOWN
+        motionAnchorPoint = null
+        isMotionTrackingActive = false
         activeStaticTemplateId = null
+        staticTemplateStartTimeMs = 0L
         _gestureState.value = GestureState.IDLE
-        _telemetryTrackerState.value = motionTracker.state
+        _recognizedGestureName.value = null
         _telemetryDeltaX.value = 0f
         _telemetryDeltaY.value = 0f
         _telemetryVelocity.value = 0f
@@ -341,7 +338,9 @@ class GestureEngine(
 
     companion object {
         private const val TAG = "GestureEngine"
-        private const val WARMUP_FRAMES = 4          // ~120ms debounce on re-acquisition
-        private const val SAFETY_RATE_LIMIT_MS = 350L // Minimal safety rate-limit backstop against double-firing
+        private const val WARMUP_FRAMES = 4             // ~120ms debounce on re-acquisition
+        private const val SAFETY_RATE_LIMIT_MS = 350L    // Minimal safety rate-limit backstop against double-firing
+        private const val MOTION_START_THRESHOLD = 0.044f // Screen space displacement to enter TRACKING
+        private const val MOTION_DECAY_THRESHOLD = 0.030f // Displacement threshold below which motion settles to IDLE
     }
 }

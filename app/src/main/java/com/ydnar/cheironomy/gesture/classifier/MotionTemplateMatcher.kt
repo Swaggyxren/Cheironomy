@@ -9,9 +9,10 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Dual-pass template matcher for custom motion gestures:
+ * Dual-pass Nearest-Neighbor template matcher for custom motion gestures:
  * Pass 1: O(1) geometric summary prefiltering.
  * Pass 2: Dynamic Time Warping (DTW) time-invariant path alignment.
+ * Selects the best candidate with reject ceiling and runner-up margin ambiguity check.
  */
 object MotionTemplateMatcher {
 
@@ -21,7 +22,7 @@ object MotionTemplateMatcher {
     fun passesPrefilter(
         candidateStats: TrajectoryStats,
         templateStats: TrajectoryStats,
-        tolerance: Float = 0.40f
+        tolerance: Float = DEFAULT_PREFILTER_TOLERANCE
     ): Boolean {
         // 1. Bounding box width check
         val widthDiff = abs(candidateStats.boundingBoxWidth - templateStats.boundingBoxWidth)
@@ -86,35 +87,57 @@ object MotionTemplateMatcher {
     }
 
     /**
-     * Evaluates a candidate trajectory against all registered motion templates.
-     * Returns the best matching template and its DTW score if under [threshold], or null.
+     * Nearest-Neighbor evaluation of a candidate trajectory against all registered motion templates.
+     * 1. Filters templates that pass the cheap O(1) prefilter.
+     * 2. Computes DTW distance for all candidates.
+     * 3. Selects top candidate (d1).
+     * 4. Rejects if d1 > rejectCeiling.
+     * 5. Rejects if top two candidates are ambiguous ((d2 - d1) / d2 < marginThreshold).
      */
     fun match(
         candidateTrajectory: List<Point2D>,
         candidateStats: TrajectoryStats,
         templates: List<MotionGestureTemplate>,
-        threshold: Float = 0.22f,
-        prefilterTolerance: Float = 0.40f
+        rejectCeiling: Float = DEFAULT_REJECT_CEILING,
+        marginThreshold: Float = DEFAULT_MARGIN_THRESHOLD,
+        prefilterTolerance: Float = DEFAULT_PREFILTER_TOLERANCE
     ): Pair<MotionGestureTemplate, Float>? {
         if (templates.isEmpty()) return null
 
-        var bestMatch: MotionGestureTemplate? = null
-        var bestScore = Float.MAX_VALUE
+        val candidateMatches = templates.filter { template ->
+            passesPrefilter(candidateStats, template.stats, prefilterTolerance)
+        }
 
-        for (template in templates) {
-            // 1. Cheap O(1) prefilter pass
-            if (!passesPrefilter(candidateStats, template.stats, prefilterTolerance)) {
-                continue
-            }
+        if (candidateMatches.isEmpty()) return null
 
-            // 2. DTW pass
-            val dtwScore = computeDtwDistance(candidateTrajectory, template.normalizedPoints)
-            if (dtwScore < threshold && dtwScore < bestScore) {
-                bestScore = dtwScore
-                bestMatch = template
+        val scored = candidateMatches.map { template ->
+            val dist = computeDtwDistance(candidateTrajectory, template.normalizedPoints)
+            Pair(template, dist)
+        }.sortedBy { it.second }
+
+        val (winner, d1) = scored[0]
+
+        // 1. Reject ceiling check
+        if (d1 > rejectCeiling) {
+            return null
+        }
+
+        // 2. Margin ambiguity check (if 2 or more candidate templates match prefiltering)
+        if (scored.size >= 2) {
+            val (_, d2) = scored[1]
+            if (d2 > 0f) {
+                val relativeMargin = (d2 - d1) / d2
+                if (relativeMargin < marginThreshold) {
+                    // Ambiguous match between top two motion templates
+                    return null
+                }
             }
         }
 
-        return bestMatch?.let { Pair(it, bestScore) }
+        return Pair(winner, d1)
     }
+
+    const val DEFAULT_REJECT_CEILING = 0.22f
+    const val DEFAULT_MARGIN_THRESHOLD = 0.15f // Winner must be at least 15% closer than runner-up
+    const val DEFAULT_PREFILTER_TOLERANCE = 0.40f
 }
