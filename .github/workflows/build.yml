@@ -37,7 +37,20 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # Decode persistent signing keystore from secret (if configured)
+      - name: Decode Signing Keystore
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        if: ${{ env.SIGNING_KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > /tmp/cheironomy-signing.jks
+
       - name: Build Debug APK
+        env:
+          KEYSTORE_FILE: /tmp/cheironomy-signing.jks
+          KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: ./gradlew assembleDebug
 
       # Extract version from app/build.gradle.kts or VERSION file, get short hash,

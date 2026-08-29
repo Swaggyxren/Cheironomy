@@ -23,9 +23,26 @@ android {
         }
     }
 
+    signingConfigs {
+        create("customSigning") {
+            val envKeystorePath = System.getenv("KEYSTORE_FILE")
+            val keystoreFile = if (!envKeystorePath.isNullOrEmpty()) file(envKeystorePath) else null
+            if (keystoreFile != null && keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "cheironomy-key-pass-2026"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "cheironomy"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "cheironomy-key-pass-2026"
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            val customConfig = signingConfigs.findByName("customSigning")
+            if (customConfig?.storeFile != null && customConfig.storeFile!!.exists()) {
+                signingConfig = customConfig
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -33,6 +50,10 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            val customConfig = signingConfigs.findByName("customSigning")
+            if (customConfig?.storeFile != null && customConfig.storeFile!!.exists()) {
+                signingConfig = customConfig
+            }
         }
     }
 
