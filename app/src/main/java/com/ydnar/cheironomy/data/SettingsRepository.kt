@@ -2,12 +2,13 @@ package com.ydnar.cheironomy.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.ydnar.cheironomy.data.template.GestureTemplate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Manages persistence and reactive updates for AppSettings.
+ * Manages persistence and reactive updates for AppSettings and custom GestureTemplates.
  */
 class SettingsRepository(context: Context) {
 
@@ -17,17 +18,23 @@ class SettingsRepository(context: Context) {
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
     private fun loadSettings(): AppSettings {
+        val templatesJson = prefs.getString(KEY_CUSTOM_TEMPLATES, null)
+        val templates = GestureTemplate.listFromJson(templatesJson)
+
         return AppSettings(
             confidenceThreshold = prefs.getFloat(KEY_CONFIDENCE, 0.5f),
             cooldownMs = prefs.getLong(KEY_COOLDOWN_MS, 1200L),
             holdDurationMs = prefs.getLong(KEY_HOLD_DURATION_MS, 500L),
             swipeSensitivity = prefs.getFloat(KEY_SWIPE_SENSITIVITY, 0.22f),
             isOverlayEnabled = prefs.getBoolean(KEY_OVERLAY_ENABLED, true),
+            motionMatchThreshold = prefs.getFloat(KEY_MOTION_MATCH_THRESHOLD, 0.22f),
+            staticMatchThreshold = prefs.getFloat(KEY_STATIC_MATCH_THRESHOLD, 0.16f),
             openPalmAction = getAction(KEY_ACTION_OPEN_PALM, GestureAction.MEDIA_PLAY_PAUSE),
             swipeLeftAction = getAction(KEY_ACTION_SWIPE_LEFT, GestureAction.SWIPE_LEFT),
             swipeRightAction = getAction(KEY_ACTION_SWIPE_RIGHT, GestureAction.SWIPE_RIGHT),
             swipeUpAction = getAction(KEY_ACTION_SWIPE_UP, GestureAction.SCROLL_DOWN),
-            swipeDownAction = getAction(KEY_ACTION_SWIPE_DOWN, GestureAction.SCROLL_UP)
+            swipeDownAction = getAction(KEY_ACTION_SWIPE_DOWN, GestureAction.SCROLL_UP),
+            customTemplates = templates
         )
     }
 
@@ -65,6 +72,36 @@ class SettingsRepository(context: Context) {
         _settings.value = _settings.value.copy(isOverlayEnabled = value)
     }
 
+    fun updateMotionMatchThreshold(value: Float) {
+        prefs.edit().putFloat(KEY_MOTION_MATCH_THRESHOLD, value).apply()
+        _settings.value = _settings.value.copy(motionMatchThreshold = value)
+    }
+
+    fun updateStaticMatchThreshold(value: Float) {
+        prefs.edit().putFloat(KEY_STATIC_MATCH_THRESHOLD, value).apply()
+        _settings.value = _settings.value.copy(staticMatchThreshold = value)
+    }
+
+    fun addCustomTemplate(template: GestureTemplate) {
+        val currentList = _settings.value.customTemplates.toMutableList()
+        // Remove existing with same id if replacing
+        currentList.removeAll { it.id == template.id }
+        currentList.add(template)
+        saveTemplates(currentList)
+    }
+
+    fun removeCustomTemplate(templateId: String) {
+        val currentList = _settings.value.customTemplates.toMutableList()
+        currentList.removeAll { it.id == templateId }
+        saveTemplates(currentList)
+    }
+
+    private fun saveTemplates(templates: List<GestureTemplate>) {
+        val jsonStr = GestureTemplate.listToJson(templates)
+        prefs.edit().putString(KEY_CUSTOM_TEMPLATES, jsonStr).apply()
+        _settings.value = _settings.value.copy(customTemplates = templates)
+    }
+
     fun updateAction(key: String, action: GestureAction) {
         prefs.edit().putString(key, action.name).apply()
         _settings.value = when (key) {
@@ -85,6 +122,9 @@ class SettingsRepository(context: Context) {
         const val KEY_HOLD_DURATION_MS = "key_hold_duration_ms"
         const val KEY_SWIPE_SENSITIVITY = "key_swipe_sensitivity"
         const val KEY_OVERLAY_ENABLED = "key_overlay_enabled"
+        const val KEY_MOTION_MATCH_THRESHOLD = "key_motion_match_threshold"
+        const val KEY_STATIC_MATCH_THRESHOLD = "key_static_match_threshold"
+        const val KEY_CUSTOM_TEMPLATES = "key_custom_templates"
 
         const val KEY_ACTION_OPEN_PALM = "key_action_open_palm"
         const val KEY_ACTION_SWIPE_LEFT = "key_action_swipe_left"

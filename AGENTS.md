@@ -130,6 +130,12 @@ Each phase = one GitHub Issue = one branch = one PR into `main`. Do not combine 
 - Floating overlay: on/off toggle, live status indicator (detecting / no hand / cooldown)
 - **Done when**: user can fully configure and toggle the feature without editing code
 
+### Phase 6 — Custom Gesture Recording (Static + Motion)
+- User-recorded custom hand motions (swipes, waves, shapes, flicks) with origin translation, scale normalization, arc-length resampling, O(1) geometric prefiltering, and speed-invariant Dynamic Time Warping (DTW) matching.
+- User-recorded custom held hand poses with wrist-relative translation and palm scale invariance.
+- In-app interactive recording flow with real-time camera feedback, countdown, path preview canvas, action assignment, and custom gestures management in Settings.
+- **Done when**: user can record any custom motion or static pose, assign it to an action, and perform it reliably without false triggers or ML training.
+
 ---
 
 ## 8. GitHub Workflow Rules (for agents)

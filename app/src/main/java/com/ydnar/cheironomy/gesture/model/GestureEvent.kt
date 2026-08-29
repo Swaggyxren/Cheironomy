@@ -1,5 +1,7 @@
 package com.ydnar.cheironomy.gesture.model
 
+import com.ydnar.cheironomy.data.template.GestureTemplate
+
 /**
  * High-level abstract gesture events emitted by GestureEngine.
  */
@@ -14,6 +16,10 @@ sealed interface GestureEvent {
         val direction: SwipeDirection,
         val displacement: Float,
         val velocity: Float
+    ) : GestureEvent
+
+    data class CustomGestureTriggered(
+        val template: GestureTemplate
     ) : GestureEvent
 }
 
