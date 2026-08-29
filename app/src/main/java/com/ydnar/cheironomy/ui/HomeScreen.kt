@@ -81,7 +81,12 @@ import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import com.ydnar.cheironomy.accessibility.CheironomyAccessibilityService
 import com.ydnar.cheironomy.camera.CameraPreview
 import com.ydnar.cheironomy.data.SettingsRepository
+import com.ydnar.cheironomy.data.template.Point2D
+import com.ydnar.cheironomy.gesture.classifier.MotionTrackerState
 import com.ydnar.cheironomy.gesture.classifier.PoseClassifier
+import com.ydnar.cheironomy.gesture.engine.GestureEngine
+import com.ydnar.cheironomy.gesture.engine.GestureEngineStatus
+import com.ydnar.cheironomy.gesture.engine.GestureState
 import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
 import com.ydnar.cheironomy.gesture.model.PoseType
 import com.ydnar.cheironomy.service.CheironomyForegroundService
@@ -143,7 +148,7 @@ fun HomeScreen() {
                 .padding(paddingValues)
         ) {
             when (selectedTabIndex) {
-                0 -> DashboardTab(context, lifecycleOwner)
+                0 -> DashboardTab(context, lifecycleOwner, settingsRepo)
                 1 -> SettingsScreen(settingsRepo)
             }
         }
@@ -153,7 +158,8 @@ fun HomeScreen() {
 @Composable
 private fun DashboardTab(
     context: Context,
-    lifecycleOwner: androidx.lifecycle.LifecycleOwner
+    lifecycleOwner: androidx.lifecycle.LifecycleOwner,
+    settingsRepo: SettingsRepository
 ) {
     // Live State from Services
     val isServiceRunning by CheironomyForegroundService.isRunning.collectAsStateWithLifecycle()
@@ -162,7 +168,20 @@ private fun DashboardTab(
     // Live MediaPipe Detection State
     var landmarkResultBundle by remember { mutableStateOf<HandLandmarkResultBundle?>(null) }
     var inferenceLatencyMs by remember { mutableLongStateOf(0L) }
-    var detectedPose by remember { mutableStateOf(PoseType.UNKNOWN) }
+    var liveFps by remember { mutableStateOf(0f) }
+    var liveConfidence by remember { mutableStateOf(0f) }
+
+    val appSettings by settingsRepo.settings.collectAsStateWithLifecycle()
+    val gestureEngine = remember { GestureEngine(settings = appSettings) }
+    val gestureStatus by gestureEngine.status.collectAsStateWithLifecycle()
+    val gestureState by gestureEngine.gestureState.collectAsStateWithLifecycle()
+    val detectedPose by gestureEngine.currentPose.collectAsStateWithLifecycle()
+    val rawCentroid by gestureEngine.telemetryRawCentroid.collectAsStateWithLifecycle()
+    val filteredCentroid by gestureEngine.telemetryFilteredCentroid.collectAsStateWithLifecycle()
+    val trackerState by gestureEngine.telemetryTrackerState.collectAsStateWithLifecycle()
+    val deltaX by gestureEngine.telemetryDeltaX.collectAsStateWithLifecycle()
+    val deltaY by gestureEngine.telemetryDeltaY.collectAsStateWithLifecycle()
+    val velocity by gestureEngine.telemetryVelocity.collectAsStateWithLifecycle()
 
     // Permission States
     var hasCameraPermission by remember {
@@ -314,12 +333,10 @@ private fun DashboardTab(
                         onLandmarkResults = { bundle ->
                             landmarkResultBundle = bundle
                             inferenceLatencyMs = bundle.inferenceTimeMs
-                            val allHands = bundle.result?.landmarks()
-                            if (allHands != null && allHands.isNotEmpty() && allHands[0].size >= 21) {
-                                detectedPose = PoseClassifier.classifyPose(allHands[0])
-                            } else {
-                                detectedPose = PoseType.UNKNOWN
-                            }
+                            liveFps = bundle.fps
+                            liveConfidence = bundle.confidence
+                            gestureEngine.updateSettings(appSettings)
+                            gestureEngine.processFrame(bundle)
                         }
                     )
 
@@ -330,59 +347,131 @@ private fun DashboardTab(
                         isFrontCamera = true
                     )
 
-                    // Real-time telemetry chips
-                    Surface(
+                    // Real-time diagnostics & telemetry chips overlay
+                    Column(
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(12.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color.Black.copy(alpha = 0.70f)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        // Top Telemetry Bar: Pose State & Confidence
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color.Black.copy(alpha = 0.75f)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.TouchApp,
-                                    contentDescription = null,
-                                    tint = if (detectedPose != PoseType.UNKNOWN) StatusGreen else Color.LightGray,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val stateColor = when (gestureStatus) {
+                                    GestureEngineStatus.RECOGNIZED -> StatusGreen
+                                    GestureEngineStatus.HOLDING -> StatusAmber
+                                    GestureEngineStatus.TRACKING -> PrimaryTeal
+                                    GestureEngineStatus.WARMING_UP -> StatusAmber
+                                    GestureEngineStatus.IDLE -> PrimaryTeal
+                                    GestureEngineStatus.SCANNING -> Color.LightGray
+                                }
+
                                 Text(
-                                    text = when (detectedPose) {
-                                        PoseType.OPEN_PALM -> "Open Palm"
-                                        PoseType.FIST -> "Fist"
-                                        PoseType.PEACE_SIGN -> "Peace"
-                                        PoseType.UNKNOWN -> "Scanning"
+                                    text = when (gestureStatus) {
+                                        GestureEngineStatus.RECOGNIZED -> "Recognized!"
+                                        GestureEngineStatus.HOLDING -> {
+                                            if (detectedPose != PoseType.UNKNOWN) "Holding ${detectedPose.name}" else "Holding Pose"
+                                        }
+                                        GestureEngineStatus.TRACKING -> "Tracking Motion"
+                                        GestureEngineStatus.WARMING_UP -> "Warming Up"
+                                        GestureEngineStatus.IDLE -> "Ready [IDLE]"
+                                        GestureEngineStatus.SCANNING -> "Scanning"
                                     },
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (detectedPose != PoseType.UNKNOWN) StatusGreen else Color.LightGray,
+                                    color = stateColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                Text(text = "•", color = Color.DarkGray, fontSize = 10.sp)
+
+                                val confPercent = (liveConfidence * 100).toInt()
+                                val confColor = if (liveConfidence >= appSettings.confidenceThreshold) StatusGreen else StatusAmber
+                                Text(
+                                    text = "Conf: $confPercent%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = confColor,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
+                        }
 
-                            Text(
-                                text = "|",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.DarkGray
-                            )
-
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Speed,
-                                    contentDescription = null,
-                                    tint = PrimaryTeal,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
+                        // Middle Telemetry Bar: 1€ Filter Comparison (Filtered vs Raw)
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color.Black.copy(alpha = 0.75f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
                                 Text(
-                                    text = "${inferenceLatencyMs} ms",
+                                    text = "1€: (${String.format("%.2f", filteredCentroid.x)}, ${String.format("%.2f", filteredCentroid.y)})",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = PrimaryTeal,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "•",
+                                    color = Color.DarkGray,
+                                    fontSize = 10.sp
+                                )
+                                Text(
+                                    text = "Raw: (${String.format("%.2f", rawCentroid.x)}, ${String.format("%.2f", rawCentroid.y)})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.Gray,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+
+                        // Bottom Telemetry Bar: Centroid Delta, Tracker State & FPS
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color.Black.copy(alpha = 0.75f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Δ(${String.format("%.2f", deltaX)}, ${String.format("%.2f", deltaY)})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                    fontSize = 10.sp
+                                )
+
+                                Text(text = "•", color = Color.DarkGray, fontSize = 10.sp)
+
+                                val trackerColor = when (trackerState) {
+                                    MotionTrackerState.IDLE -> Color.Gray
+                                    MotionTrackerState.TRACKING -> PrimaryTeal
+                                    MotionTrackerState.RECOGNIZED -> StatusGreen
+                                }
+                                Text(
+                                    text = "[${trackerState.name}]",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = trackerColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+
+                                Text(text = "•", color = Color.DarkGray, fontSize = 10.sp)
+
+                                Text(
+                                    text = "${liveFps.toInt()} FPS (${inferenceLatencyMs}ms)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = PrimaryTeal,
+                                    fontSize = 10.sp
                                 )
                             }
                         }

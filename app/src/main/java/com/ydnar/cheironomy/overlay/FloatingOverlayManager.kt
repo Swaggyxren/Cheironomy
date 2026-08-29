@@ -141,19 +141,27 @@ class FloatingOverlayManager(private val context: Context) {
         if (!isVisible) return
         mainHandler.post {
             when (status) {
-                GestureEngineStatus.SCANNING, GestureEngineStatus.IDLE -> {
+                GestureEngineStatus.SCANNING -> {
                     statusText?.text = "Scanning"
                     statusIcon?.setColorFilter(Color.parseColor("#00E5FF"))
                 }
-                GestureEngineStatus.HAND_DETECTED -> {
-                    statusText?.text = "Hand Ready"
-                    statusIcon?.setColorFilter(Color.parseColor("#00E676"))
+                GestureEngineStatus.IDLE -> {
+                    statusText?.text = "Ready"
+                    statusIcon?.setColorFilter(Color.parseColor("#00E5FF"))
                 }
-                GestureEngineStatus.COOLDOWN -> {
-                    statusText?.text = "Cooldown"
+                GestureEngineStatus.WARMING_UP -> {
+                    statusText?.text = "Warming Up"
                     statusIcon?.setColorFilter(Color.parseColor("#FFAB00"))
                 }
-                GestureEngineStatus.ACTION_TRIGGERED -> {
+                GestureEngineStatus.HOLDING -> {
+                    statusText?.text = "Holding Pose"
+                    statusIcon?.setColorFilter(Color.parseColor("#FFAB00"))
+                }
+                GestureEngineStatus.TRACKING -> {
+                    statusText?.text = "Tracking"
+                    statusIcon?.setColorFilter(Color.parseColor("#00E676"))
+                }
+                GestureEngineStatus.RECOGNIZED -> {
                     statusText?.text = "Action!"
                     statusIcon?.setColorFilter(Color.parseColor("#00E676"))
                 }
