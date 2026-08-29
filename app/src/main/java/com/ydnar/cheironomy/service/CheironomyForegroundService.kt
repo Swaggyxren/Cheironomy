@@ -206,6 +206,7 @@ class CheironomyForegroundService : Service(), LifecycleOwner {
                 cameraProvider = cameraProviderFuture.get()
 
                 val imageAnalyzer = ImageAnalysis.Builder()
+                    .setTargetResolution(android.util.Size(640, 480))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
@@ -251,6 +252,9 @@ class CheironomyForegroundService : Service(), LifecycleOwner {
                     SwipeDirection.UP -> settings.swipeUpAction
                     SwipeDirection.DOWN -> settings.swipeDownAction
                 }
+            }
+            is GestureEvent.CustomGestureTriggered -> {
+                event.template.action
             }
         }
 

@@ -16,7 +16,8 @@ import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
 
 /**
- * Helper class that wraps MediaPipe HandLandmarker for live-stream inference.
+ * Helper class that wraps MediaPipe HandLandmarker for live-stream inference
+ * with confidence extraction and FPS telemetry tracking.
  */
 class HandLandmarkerHelper(
     var minHandDetectionConfidence: Float = DEFAULT_HAND_DETECTION_CONFIDENCE,
@@ -30,6 +31,10 @@ class HandLandmarkerHelper(
 ) {
 
     private var handLandmarker: HandLandmarker? = null
+
+    // FPS tracking
+    private var lastFrameTimeMs: Long = 0L
+    private var smoothedFps: Float = 30f
 
     init {
         setupHandLandmarker()
@@ -103,6 +108,14 @@ class HandLandmarkerHelper(
 
         val frameTime = SystemClock.uptimeMillis()
 
+        // Calculate live FPS
+        if (lastFrameTimeMs > 0L) {
+            val deltaMs = (frameTime - lastFrameTimeMs).coerceAtLeast(1L)
+            val instantFps = 1000f / deltaMs
+            smoothedFps = smoothedFps * 0.85f + instantFps * 0.15f
+        }
+        lastFrameTimeMs = frameTime
+
         imageProxy.use {
             val bitmap = imageProxy.toBitmap()
             val matrix = Matrix().apply {
@@ -131,12 +144,21 @@ class HandLandmarkerHelper(
         val finishTimeMs = SystemClock.uptimeMillis()
         val inferenceTime = finishTimeMs - result.timestampMs()
 
+        // Extract confidence from first detected hand handedness category score
+        val confidence = try {
+            result.handedness().firstOrNull()?.firstOrNull()?.score() ?: 0f
+        } catch (e: Exception) {
+            0f
+        }
+
         handLandmarkerHelperListener?.onResults(
             HandLandmarkResultBundle(
                 result = result,
                 inferenceTimeMs = inferenceTime,
                 inputImageHeight = input.height,
-                inputImageWidth = input.width
+                inputImageWidth = input.width,
+                confidence = confidence,
+                fps = smoothedFps
             )
         )
     }
@@ -162,9 +184,9 @@ class HandLandmarkerHelper(
         const val DELEGATE_CPU = 0
         const val DELEGATE_GPU = 1
 
-        const val DEFAULT_HAND_DETECTION_CONFIDENCE = 0.5f
-        const val DEFAULT_HAND_TRACKING_CONFIDENCE = 0.5f
-        const val DEFAULT_HAND_PRESENCE_CONFIDENCE = 0.5f
+        const val DEFAULT_HAND_DETECTION_CONFIDENCE = 0.65f
+        const val DEFAULT_HAND_TRACKING_CONFIDENCE = 0.65f
+        const val DEFAULT_HAND_PRESENCE_CONFIDENCE = 0.65f
         const val DEFAULT_NUM_HANDS = 1
     }
 }
