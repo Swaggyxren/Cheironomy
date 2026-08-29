@@ -10,9 +10,6 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,16 +29,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessibilityNew
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -77,18 +74,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import com.ydnar.cheironomy.accessibility.CheironomyAccessibilityService
 import com.ydnar.cheironomy.camera.CameraPreview
 import com.ydnar.cheironomy.data.SettingsRepository
-import com.ydnar.cheironomy.data.template.Point2D
-import com.ydnar.cheironomy.gesture.classifier.MotionTrackerState
-import com.ydnar.cheironomy.gesture.classifier.PoseClassifier
 import com.ydnar.cheironomy.gesture.engine.GestureEngine
 import com.ydnar.cheironomy.gesture.engine.GestureEngineStatus
 import com.ydnar.cheironomy.gesture.engine.GestureState
 import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
-import com.ydnar.cheironomy.gesture.model.PoseType
 import com.ydnar.cheironomy.service.CheironomyForegroundService
 import com.ydnar.cheironomy.ui.overlay.HandLandmarkOverlay
 import com.ydnar.cheironomy.ui.theme.BackgroundDark
@@ -148,7 +140,12 @@ fun HomeScreen() {
                 .padding(paddingValues)
         ) {
             when (selectedTabIndex) {
-                0 -> DashboardTab(context, lifecycleOwner, settingsRepo)
+                0 -> DashboardTab(
+                    context = context,
+                    lifecycleOwner = lifecycleOwner,
+                    settingsRepo = settingsRepo,
+                    onNavigateToRecord = { selectedTabIndex = 1 }
+                )
                 1 -> SettingsScreen(settingsRepo)
             }
         }
@@ -159,7 +156,8 @@ fun HomeScreen() {
 private fun DashboardTab(
     context: Context,
     lifecycleOwner: androidx.lifecycle.LifecycleOwner,
-    settingsRepo: SettingsRepository
+    settingsRepo: SettingsRepository,
+    onNavigateToRecord: () -> Unit
 ) {
     // Live State from Services
     val isServiceRunning by CheironomyForegroundService.isRunning.collectAsStateWithLifecycle()
@@ -175,13 +173,11 @@ private fun DashboardTab(
     val gestureEngine = remember { GestureEngine(settings = appSettings) }
     val gestureStatus by gestureEngine.status.collectAsStateWithLifecycle()
     val gestureState by gestureEngine.gestureState.collectAsStateWithLifecycle()
-    val detectedPose by gestureEngine.currentPose.collectAsStateWithLifecycle()
+    val recognizedName by gestureEngine.recognizedGestureName.collectAsStateWithLifecycle()
     val rawCentroid by gestureEngine.telemetryRawCentroid.collectAsStateWithLifecycle()
     val filteredCentroid by gestureEngine.telemetryFilteredCentroid.collectAsStateWithLifecycle()
-    val trackerState by gestureEngine.telemetryTrackerState.collectAsStateWithLifecycle()
     val deltaX by gestureEngine.telemetryDeltaX.collectAsStateWithLifecycle()
     val deltaY by gestureEngine.telemetryDeltaY.collectAsStateWithLifecycle()
-    val velocity by gestureEngine.telemetryVelocity.collectAsStateWithLifecycle()
 
     // Permission States
     var hasCameraPermission by remember {
@@ -233,7 +229,7 @@ private fun DashboardTab(
         hasNotificationPermission = isGranted
     }
 
-    // Re-check permissions and accessibility status on activity resume
+    // Re-check permissions on activity resume
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -373,17 +369,17 @@ private fun DashboardTab(
                                     GestureEngineStatus.SCANNING -> Color.LightGray
                                 }
 
+                                val statusLabel = when (gestureStatus) {
+                                    GestureEngineStatus.RECOGNIZED -> if (recognizedName != null) "Recognized: $recognizedName" else "Recognized!"
+                                    GestureEngineStatus.HOLDING -> if (recognizedName != null) "Holding: $recognizedName" else "Holding Pose"
+                                    GestureEngineStatus.TRACKING -> "Tracking Motion"
+                                    GestureEngineStatus.WARMING_UP -> "Warming Up"
+                                    GestureEngineStatus.IDLE -> "Ready [IDLE]"
+                                    GestureEngineStatus.SCANNING -> "Scanning"
+                                }
+
                                 Text(
-                                    text = when (gestureStatus) {
-                                        GestureEngineStatus.RECOGNIZED -> "Recognized!"
-                                        GestureEngineStatus.HOLDING -> {
-                                            if (detectedPose != PoseType.UNKNOWN) "Holding ${detectedPose.name}" else "Holding Pose"
-                                        }
-                                        GestureEngineStatus.TRACKING -> "Tracking Motion"
-                                        GestureEngineStatus.WARMING_UP -> "Warming Up"
-                                        GestureEngineStatus.IDLE -> "Ready [IDLE]"
-                                        GestureEngineStatus.SCANNING -> "Scanning"
-                                    },
+                                    text = statusLabel,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = stateColor,
                                     fontWeight = FontWeight.Bold
@@ -433,7 +429,7 @@ private fun DashboardTab(
                             }
                         }
 
-                        // Bottom Telemetry Bar: Centroid Delta, Tracker State & FPS
+                        // Bottom Telemetry Bar: Centroid Delta, State & FPS
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = Color.Black.copy(alpha = 0.75f)
@@ -452,15 +448,16 @@ private fun DashboardTab(
 
                                 Text(text = "•", color = Color.DarkGray, fontSize = 10.sp)
 
-                                val trackerColor = when (trackerState) {
-                                    MotionTrackerState.IDLE -> Color.Gray
-                                    MotionTrackerState.TRACKING -> PrimaryTeal
-                                    MotionTrackerState.RECOGNIZED -> StatusGreen
+                                val stateColor = when (gestureState) {
+                                    GestureState.IDLE -> Color.Gray
+                                    GestureState.HOLDING -> StatusAmber
+                                    GestureState.TRACKING -> PrimaryTeal
+                                    GestureState.RECOGNIZED -> StatusGreen
                                 }
                                 Text(
-                                    text = "[${trackerState.name}]",
+                                    text = "[${gestureState.name}]",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = trackerColor,
+                                    color = stateColor,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 10.sp
                                 )
@@ -516,6 +513,52 @@ private fun DashboardTab(
                                 Text("Grant Permission", color = Color.Black, fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Onboarding Empty-State Card: Prompt to record first gesture if none exist
+        if (appSettings.customTemplates.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBackground)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Gesture,
+                        contentDescription = null,
+                        tint = PrimaryTeal,
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "No Gestures Recorded Yet",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Cheironomy uses pure custom templates. Record your first motion gesture or static pose to start controlling your device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.LightGray,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Button(
+                        onClick = onNavigateToRecord,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryTeal)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Record First Gesture", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -722,9 +765,6 @@ private fun StatusRow(
     }
 }
 
-/**
- * Checks whether CheironomyAccessibilityService is enabled in Android Accessibility Settings.
- */
 private fun checkAccessibilityServiceEnabled(context: Context): Boolean {
     val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager ?: return false
     val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_GENERIC)

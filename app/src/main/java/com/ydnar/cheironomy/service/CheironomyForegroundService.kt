@@ -29,8 +29,6 @@ import com.ydnar.cheironomy.gesture.HandLandmarkerHelper
 import com.ydnar.cheironomy.gesture.engine.GestureEngine
 import com.ydnar.cheironomy.gesture.model.GestureEvent
 import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
-import com.ydnar.cheironomy.gesture.model.PoseType
-import com.ydnar.cheironomy.gesture.model.SwipeDirection
 import com.ydnar.cheironomy.media.MediaActionDispatcher
 import com.ydnar.cheironomy.overlay.FloatingOverlayManager
 import kotlinx.coroutines.CoroutineScope
@@ -236,31 +234,13 @@ class CheironomyForegroundService : Service(), LifecycleOwner {
     }
 
     private fun handleGestureEvent(event: GestureEvent) {
-        val settings = settingsRepo.settings.value
-
         val targetAction = when (event) {
-            is GestureEvent.StaticPoseHeld -> {
-                when (event.pose) {
-                    PoseType.OPEN_PALM -> settings.openPalmAction
-                    else -> GestureAction.NONE
-                }
-            }
-            is GestureEvent.MotionSwipe -> {
-                when (event.direction) {
-                    SwipeDirection.LEFT -> settings.swipeLeftAction
-                    SwipeDirection.RIGHT -> settings.swipeRightAction
-                    SwipeDirection.UP -> settings.swipeUpAction
-                    SwipeDirection.DOWN -> settings.swipeDownAction
-                }
-            }
-            is GestureEvent.CustomGestureTriggered -> {
-                event.template.action
-            }
+            is GestureEvent.CustomGestureTriggered -> event.template.action
         }
 
         if (targetAction == GestureAction.NONE) return
 
-        Log.i(TAG, "Executing Action: ${targetAction.displayName} for event: $event")
+        Log.i(TAG, "Executing Action: ${targetAction.displayName} for template: ${(event as GestureEvent.CustomGestureTriggered).template.name}")
         overlayManager.showActionTriggered(targetAction)
 
         // Route to Media or Accessibility

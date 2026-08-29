@@ -78,7 +78,7 @@ import com.ydnar.cheironomy.data.template.GestureTemplate.MotionGestureTemplate
 import com.ydnar.cheironomy.data.template.GestureTemplate.StaticGestureTemplate
 import com.ydnar.cheironomy.data.template.Point2D
 import com.ydnar.cheironomy.data.template.TrajectoryStats
-import com.ydnar.cheironomy.gesture.classifier.PoseClassifier
+import com.ydnar.cheironomy.gesture.classifier.PalmCentroidHelper
 import com.ydnar.cheironomy.gesture.classifier.StaticTemplateMatcher
 import com.ydnar.cheironomy.gesture.classifier.TrajectoryNormalizer
 import com.ydnar.cheironomy.gesture.model.HandLandmarkResultBundle
@@ -283,7 +283,7 @@ fun GestureRecordingDialog(
 
                                         if (recordingState == RecordingState.RECORDING) {
                                             if (recordingMode == RecordingMode.MOTION) {
-                                                val (cx, cy) = PoseClassifier.calculatePalmCentroid(hand)
+                                                val (cx, cy) = PalmCentroidHelper.calculatePalmCentroid(hand)
                                                 capturedCentroids.add(Point2D(cx, cy))
                                             } else {
                                                 capturedStaticLandmarkSets.add(hand)
