@@ -4,9 +4,11 @@ import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import com.ydnar.cheironomy.data.AppSettings
 import com.ydnar.cheironomy.data.GestureAction
+import com.ydnar.cheironomy.data.template.GestureTemplate.MotionGestureTemplate
 import com.ydnar.cheironomy.data.template.GestureTemplate.StaticGestureTemplate
 import com.ydnar.cheironomy.data.template.Point2D
 import com.ydnar.cheironomy.gesture.classifier.StaticTemplateMatcher
+import com.ydnar.cheironomy.gesture.classifier.TrajectoryNormalizer
 import com.ydnar.cheironomy.gesture.engine.GestureEngine
 import com.ydnar.cheironomy.gesture.engine.GestureEngineStatus
 import com.ydnar.cheironomy.gesture.engine.GestureState
@@ -18,9 +20,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.`when`
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class GestureStateMachineTest {
@@ -47,6 +52,7 @@ class GestureStateMachineTest {
             settings = AppSettings(
                 holdDurationMs = 500L,
                 confidenceThreshold = 0.60f,
+                staticRejectCeiling = 0.11f,
                 customTemplates = listOf(testTemplate)
             )
         )
@@ -71,40 +77,35 @@ class GestureStateMachineTest {
 
     @Test
     fun `test initial 4 frames are WARMING_UP debounce`() {
-        val landmarks = createOpenPalmLanmarks(centerX = 0.5f, centerY = 0.5f)
+        val landmarks = createOpenPalmLanmarks(0.5f, 0.5f)
         val bundle = createBundle(landmarks)
 
-        // Frames 1 to 4 should be WARMING_UP
         for (i in 1..4) {
             gestureEngine.processFrame(bundle)
             assertEquals("Frame $i should be WARMING_UP", GestureEngineStatus.WARMING_UP, gestureEngine.status.value)
             assertEquals(GestureState.IDLE, gestureEngine.gestureState.value)
         }
 
-        // Frame 5 should transition out of WARMING_UP
         gestureEngine.processFrame(bundle)
         assertTrue(gestureEngine.status.value != GestureEngineStatus.WARMING_UP)
     }
 
     @Test
-    fun `test holding custom static pose transitions IDLE to HOLDING then RECOGNIZED`() = runTest {
+    fun `test holding custom static pose while still transitions IDLE to HOLDING then RECOGNIZED`() = runTest {
         val events = mutableListOf<GestureEvent>()
         val job = launch(testDispatcher) {
             gestureEngine.gestureEvents.collect { events.add(it) }
         }
 
-        val landmarks = createOpenPalmLanmarks(centerX = 0.5f, centerY = 0.5f)
+        val landmarks = createOpenPalmLanmarks(0.5f, 0.5f)
         val bundle = createBundle(landmarks)
 
-        // Warm up (4 frames)
         for (i in 1..4) gestureEngine.processFrame(bundle)
 
-        // Frame 5: pose detected, enters HOLDING
         gestureEngine.processFrame(bundle)
         assertEquals(GestureEngineStatus.HOLDING, gestureEngine.status.value)
         assertEquals(GestureState.HOLDING, gestureEngine.gestureState.value)
 
-        // Simulate time passing (550ms hold)
         Thread.sleep(550L)
         gestureEngine.processFrame(bundle)
 
@@ -116,34 +117,46 @@ class GestureStateMachineTest {
     }
 
     @Test
-    fun `test breaking pose prematurely resets immediately from HOLDING to IDLE with no delay`() {
-        val openPalmLandmarks = createOpenPalmLanmarks(centerX = 0.5f, centerY = 0.5f)
-        val neutralLandmarks = createNeutralLandmarks(centerX = 0.5f, centerY = 0.5f)
+    fun `test moving hand prevents entering or accumulating static pose hold time`() {
+        // Warm up at (0.3, 0.5)
+        for (i in 1..4) {
+            gestureEngine.processFrame(createBundle(createOpenPalmLanmarks(0.3f, 0.5f)))
+        }
 
-        // Warm up
+        // Rapidly move hand across the screen (0.05 units per frame)
+        var posX = 0.35f
+        for (i in 1..5) {
+            gestureEngine.processFrame(createBundle(createOpenPalmLanmarks(posX, 0.5f)))
+            posX += 0.05f
+        }
+
+        // Moving hand exceeds STILLNESS_MAX_VELOCITY, must not be in HOLDING
+        assertNotEquals("Moving hand must not enter or hold static pose", GestureState.HOLDING, gestureEngine.gestureState.value)
+    }
+
+    @Test
+    fun `test breaking pose prematurely resets immediately from HOLDING to IDLE with no delay`() {
+        val openPalmLandmarks = createOpenPalmLanmarks(0.5f, 0.5f)
+        val neutralLandmarks = createNeutralLandmarks(0.5f, 0.5f)
+
         for (i in 1..4) gestureEngine.processFrame(createBundle(openPalmLandmarks))
 
-        // Enter HOLDING
         gestureEngine.processFrame(createBundle(openPalmLandmarks))
         assertEquals(GestureState.HOLDING, gestureEngine.gestureState.value)
 
-        // Break pose before hold duration (send neutral landmarks)
         gestureEngine.processFrame(createBundle(neutralLandmarks))
 
-        // Should immediately return to IDLE without waiting for any cooldown
         assertEquals(GestureState.IDLE, gestureEngine.gestureState.value)
         assertEquals(GestureEngineStatus.IDLE, gestureEngine.status.value)
     }
 
     @Test
     fun `test hand loss immediately resets state machine and clears buffers`() {
-        val openPalmLandmarks = createOpenPalmLanmarks(centerX = 0.5f, centerY = 0.5f)
+        val openPalmLandmarks = createOpenPalmLanmarks(0.5f, 0.5f)
 
-        // Warm up + enter HOLDING
         for (i in 1..5) gestureEngine.processFrame(createBundle(openPalmLandmarks))
         assertEquals(GestureState.HOLDING, gestureEngine.gestureState.value)
 
-        // Hand lost frame (result = null, low confidence)
         val lostBundle = HandLandmarkResultBundle(
             result = null,
             inferenceTimeMs = 5L,
@@ -154,18 +167,13 @@ class GestureStateMachineTest {
         )
         gestureEngine.processFrame(lostBundle)
 
-        // Must reset immediately to SCANNING and IDLE
         assertEquals(GestureEngineStatus.SCANNING, gestureEngine.status.value)
         assertEquals(GestureState.IDLE, gestureEngine.gestureState.value)
     }
 
     private fun createBundle(landmarks: List<NormalizedLandmark>): HandLandmarkResultBundle {
-        val result = HandLandmarkerResult.create(
-            listOf(landmarks),
-            emptyList(),
-            emptyList(),
-            0L
-        )
+        val result = mock(HandLandmarkerResult::class.java)
+        `when`(result.landmarks()).thenReturn(listOf(landmarks))
         return HandLandmarkResultBundle(
             result = result,
             inferenceTimeMs = 15L,
@@ -178,29 +186,23 @@ class GestureStateMachineTest {
 
     private fun createOpenPalmLanmarks(centerX: Float, centerY: Float): List<NormalizedLandmark> {
         val list = ArrayList<NormalizedLandmark>(21)
-        // Wrist (0)
         list.add(NormalizedLandmark.create(centerX, centerY + 0.15f, 0f))
-        // Thumb (1..4)
         list.add(NormalizedLandmark.create(centerX - 0.04f, centerY + 0.10f, 0f))
         list.add(NormalizedLandmark.create(centerX - 0.08f, centerY + 0.06f, 0f))
         list.add(NormalizedLandmark.create(centerX - 0.12f, centerY + 0.03f, 0f))
         list.add(NormalizedLandmark.create(centerX - 0.16f, centerY + 0.00f, 0f))
-        // Index (5..8)
         list.add(NormalizedLandmark.create(centerX - 0.04f, centerY + 0.05f, 0f))
         list.add(NormalizedLandmark.create(centerX - 0.05f, centerY - 0.03f, 0f))
         list.add(NormalizedLandmark.create(centerX - 0.06f, centerY - 0.10f, 0f))
         list.add(NormalizedLandmark.create(centerX - 0.07f, centerY - 0.18f, 0f))
-        // Middle (9..12)
         list.add(NormalizedLandmark.create(centerX, centerY + 0.05f, 0f))
         list.add(NormalizedLandmark.create(centerX, centerY - 0.04f, 0f))
         list.add(NormalizedLandmark.create(centerX, centerY - 0.12f, 0f))
         list.add(NormalizedLandmark.create(centerX, centerY - 0.20f, 0f))
-        // Ring (13..16)
         list.add(NormalizedLandmark.create(centerX + 0.04f, centerY + 0.05f, 0f))
         list.add(NormalizedLandmark.create(centerX + 0.05f, centerY - 0.03f, 0f))
         list.add(NormalizedLandmark.create(centerX + 0.06f, centerY - 0.10f, 0f))
         list.add(NormalizedLandmark.create(centerX + 0.07f, centerY - 0.17f, 0f))
-        // Pinky (17..20)
         list.add(NormalizedLandmark.create(centerX + 0.08f, centerY + 0.07f, 0f))
         list.add(NormalizedLandmark.create(centerX + 0.09f, centerY + 0.00f, 0f))
         list.add(NormalizedLandmark.create(centerX + 0.10f, centerY - 0.06f, 0f))

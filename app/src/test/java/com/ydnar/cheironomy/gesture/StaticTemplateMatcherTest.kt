@@ -58,7 +58,7 @@ class StaticTemplateMatcherTest {
 
         val templates = listOf(templatePeace, templateFist)
 
-        // Live input: very close to Peace Sign
+        // Live input: very close to Peace Sign (distance < 0.05)
         val liveLandmarks = peacePoints.map {
             NormalizedLandmark.create(it.x + 0.005f, it.y - 0.005f, 0f)
         }
@@ -66,7 +66,7 @@ class StaticTemplateMatcherTest {
         val match = StaticTemplateMatcher.match(
             landmarks = liveLandmarks,
             templates = templates,
-            rejectCeiling = 0.18f,
+            rejectCeiling = StaticTemplateMatcher.DEFAULT_REJECT_CEILING,
             marginThreshold = 0.15f
         )
 
@@ -95,10 +95,38 @@ class StaticTemplateMatcherTest {
         val match = StaticTemplateMatcher.match(
             landmarks = dissimilarLive,
             templates = listOf(template),
-            rejectCeiling = 0.18f
+            rejectCeiling = StaticTemplateMatcher.DEFAULT_REJECT_CEILING
         )
 
         assertNull("Dissimilar input exceeding reject ceiling must be rejected", match)
+    }
+
+    @Test
+    fun `test relaxed neutral hand is rejected by tightened 0_11 ceiling against open palm`() {
+        // Defined open palm
+        val openPalm = List(21) { idx ->
+            Point2D(0.5f, 0.8f - idx * 0.03f)
+        }
+        val template = StaticGestureTemplate(
+            id = "open_palm",
+            name = "Open Palm",
+            action = GestureAction.MEDIA_PLAY_PAUSE,
+            landmarks = StaticTemplateMatcher.normalizePoints(openPalm)!!
+        )
+
+        // Relaxed hand (curled fingertips with average deviation of ~0.14)
+        val relaxedHand = openPalm.mapIndexed { idx, p ->
+            val curl = if (idx in listOf(4, 8, 12, 16, 20)) 0.04f else 0.015f
+            NormalizedLandmark.create(p.x + curl, p.y + curl, 0f)
+        }
+
+        val match = StaticTemplateMatcher.match(
+            landmarks = relaxedHand,
+            templates = listOf(template),
+            rejectCeiling = StaticTemplateMatcher.DEFAULT_REJECT_CEILING
+        )
+
+        assertNull("Neutral/relaxed hand must not trigger static open palm template", match)
     }
 
     @Test
@@ -131,7 +159,7 @@ class StaticTemplateMatcherTest {
         val match = StaticTemplateMatcher.match(
             landmarks = ambiguousLive,
             templates = listOf(templateA, templateB),
-            rejectCeiling = 0.18f,
+            rejectCeiling = 0.15f,
             marginThreshold = 0.20f // 20% margin required
         )
 

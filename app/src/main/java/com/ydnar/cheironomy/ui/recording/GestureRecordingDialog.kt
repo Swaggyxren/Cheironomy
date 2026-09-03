@@ -91,6 +91,7 @@ import com.ydnar.cheironomy.ui.theme.StatusGreen
 import com.ydnar.cheironomy.ui.theme.StatusRed
 import kotlinx.coroutines.delay
 import java.util.UUID
+import kotlin.math.hypot
 
 private enum class RecordingState {
     READY,
@@ -102,6 +103,37 @@ private enum class RecordingState {
 private enum class RecordingMode {
     MOTION,
     STATIC_POSE
+}
+
+
+/**
+ * Trims leading and trailing stillness from a recorded motion trajectory so the
+ * template represents the deliberate stroke, not the hand idling before/after it.
+ */
+private fun trimStillness(points: List<Point2D>): List<Point2D> {
+    if (points.size < 3) return points
+
+    val steps = mutableListOf<Float>()
+    for (i in 1 until points.size) {
+        steps.add(hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y))
+    }
+    if (steps.isEmpty()) return points
+    val sorted = steps.sorted()
+    val median = sorted[sorted.size / 2]
+    val threshold = (median * 0.35f).coerceAtLeast(0.004f)
+
+    var start = 0
+    while (start < points.size - 1 && hypot(points[start + 1].x - points[start].x, points[start + 1].y - points[start].y) < threshold) {
+        start++
+    }
+
+    var end = points.size - 1
+    while (end > start + 1 && hypot(points[end].x - points[end - 1].x, points[end].y - points[end - 1].y) < threshold) {
+        end--
+    }
+
+    val trimmed = points.subList(start, end + 1)
+    return if (trimmed.size >= 3) trimmed else points
 }
 
 /**
@@ -159,7 +191,8 @@ fun GestureRecordingDialog(
             // Finish recording and process
             if (recordingMode == RecordingMode.MOTION) {
                 if (capturedCentroids.size >= 4) {
-                    val norm = TrajectoryNormalizer.normalizeTrajectory(capturedCentroids)
+                    val trimmed = trimStillness(capturedCentroids)
+                    val norm = TrajectoryNormalizer.normalizeTrajectory(trimmed)
                     if (norm != null && norm.second.totalPathLength >= 0.05f) {
                         normalizedMotionPoints = norm.first
                         motionStats = norm.second

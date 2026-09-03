@@ -23,9 +23,9 @@ class SettingsRepository(context: Context) {
 
         return AppSettings(
             confidenceThreshold = prefs.getFloat(KEY_CONFIDENCE, 0.65f),
-            holdDurationMs = prefs.getLong(KEY_HOLD_DURATION_MS, 500L),
+            holdDurationMs = prefs.getLong(KEY_HOLD_DURATION_MS, 700L),
             isOverlayEnabled = prefs.getBoolean(KEY_OVERLAY_ENABLED, true),
-            staticRejectCeiling = prefs.getFloat(KEY_STATIC_REJECT_CEILING, 0.18f),
+            staticRejectCeiling = prefs.getFloat(KEY_STATIC_REJECT_CEILING, 0.11f),
             staticMarginThreshold = prefs.getFloat(KEY_STATIC_MARGIN_THRESHOLD, 0.15f),
             motionRejectCeiling = prefs.getFloat(KEY_MOTION_REJECT_CEILING, 0.22f),
             motionMarginThreshold = prefs.getFloat(KEY_MOTION_MARGIN_THRESHOLD, 0.15f),

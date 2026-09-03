@@ -114,6 +114,6 @@ object StaticTemplateMatcher {
         return Pair(winner, d1)
     }
 
-    const val DEFAULT_REJECT_CEILING = 0.18f
+    const val DEFAULT_REJECT_CEILING = 0.11f
     const val DEFAULT_MARGIN_THRESHOLD = 0.15f // Winner must be at least 15% closer than runner-up
 }

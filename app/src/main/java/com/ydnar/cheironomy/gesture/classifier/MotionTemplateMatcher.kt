@@ -16,14 +16,25 @@ import kotlin.math.min
  */
 object MotionTemplateMatcher {
 
+    const val MIN_PHYSICAL_PATH_LENGTH = 0.18f
+
     /**
-     * Cheap O(1) prefilter pass checking bounding-box aspect ratio and displacement direction.
+     * Cheap O(1) prefilter pass checking:
+     * 1. Physical stroke length scale compatibility.
+     * 2. Bounding-box aspect ratio.
+     * 3. Displacement vector direction and physical magnitude.
      */
     fun passesPrefilter(
         candidateStats: TrajectoryStats,
         templateStats: TrajectoryStats,
         tolerance: Float = DEFAULT_PREFILTER_TOLERANCE
     ): Boolean {
+        // 0. Physical scale / path length check:
+        // Reject movements that are physically too small or have a wild magnitude mismatch with the recorded gesture.
+        if (candidateStats.totalPathLength < MIN_PHYSICAL_PATH_LENGTH) return false
+        val lengthRatio = candidateStats.totalPathLength / templateStats.totalPathLength.coerceAtLeast(0.05f)
+        if (lengthRatio < 0.45f || lengthRatio > 2.2f) return false
+
         // 1. Bounding box width check
         val widthDiff = abs(candidateStats.boundingBoxWidth - templateStats.boundingBoxWidth)
         val maxAllowedWidthDiff = max(templateStats.boundingBoxWidth, 0.15f) * (1f + tolerance)
@@ -34,7 +45,7 @@ object MotionTemplateMatcher {
         val maxAllowedHeightDiff = max(templateStats.boundingBoxHeight, 0.15f) * (1f + tolerance)
         if (heightDiff > maxAllowedHeightDiff) return false
 
-        // 3. Displacement vector direction check
+        // 3. Displacement vector direction & physical magnitude check
         val lenC = hypot(candidateStats.displacementX, candidateStats.displacementY)
         val lenT = hypot(templateStats.displacementX, templateStats.displacementY)
 
@@ -42,6 +53,10 @@ object MotionTemplateMatcher {
         val isDirectionalCandidate = lenC > 0.15f
 
         if (isDirectionalTemplate && isDirectionalCandidate) {
+            // Check physical unnormalized displacement magnitude
+            val rawDisplacementC = candidateStats.totalPathLength * lenC
+            if (rawDisplacementC < 0.12f) return false
+
             val dotProduct = (candidateStats.displacementX * templateStats.displacementX) +
                     (candidateStats.displacementY * templateStats.displacementY)
             val cosAngle = dotProduct / (lenC * lenT)

@@ -309,8 +309,8 @@ fun SettingsScreen(
                 Slider(
                     value = settings.staticRejectCeiling,
                     onValueChange = { settingsRepo.updateStaticRejectCeiling(it) },
-                    valueRange = 0.08f..0.32f,
-                    steps = 12,
+                    valueRange = 0.06f..0.24f,
+                    steps = 17,
                     colors = SliderDefaults.colors(
                         thumbColor = PrimaryTeal,
                         activeTrackColor = PrimaryTeal

@@ -7,9 +7,9 @@ import com.ydnar.cheironomy.data.template.GestureTemplate
  */
 data class AppSettings(
     val confidenceThreshold: Float = 0.65f,
-    val holdDurationMs: Long = 500L,
+    val holdDurationMs: Long = 700L,
     val isOverlayEnabled: Boolean = true,
-    val staticRejectCeiling: Float = 0.18f,       // Max Euclidean distance for static poses
+    val staticRejectCeiling: Float = 0.11f,       // Max Euclidean distance for static poses
     val staticMarginThreshold: Float = 0.15f,     // Required margin over runner-up static match (15%)
     val motionRejectCeiling: Float = 0.22f,       // Max DTW distance for motion gestures
     val motionMarginThreshold: Float = 0.15f,     // Required margin over runner-up motion match (15%)

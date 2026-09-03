@@ -26,7 +26,7 @@ class MotionTemplateMatcherTest {
             displacementY = 0.0f
         )
 
-        // Candidate 1: Another horizontal right swipe (similar stats)
+        // Candidate 1: Another horizontal right swipe (similar stats and physical scale)
         val similarCandidate = TrajectoryStats(
             totalPathLength = 0.45f,
             boundingBoxWidth = 0.95f,
@@ -55,6 +55,17 @@ class MotionTemplateMatcherTest {
             displacementY = 0.0f
         )
         assertFalse(MotionTemplateMatcher.passesPrefilter(oppositeCandidate, horizontalSwipeStats))
+
+        // Candidate 4: Micro-twitch in same direction (physical path length too small)
+        val microTwitchCandidate = TrajectoryStats(
+            totalPathLength = 0.08f,
+            boundingBoxWidth = 1.0f,
+            boundingBoxHeight = 0.05f,
+            displacementX = 1.0f,
+            displacementY = 0.0f
+        )
+        assertFalse("Micro-twitch must be rejected by physical scale check",
+            MotionTemplateMatcher.passesPrefilter(microTwitchCandidate, horizontalSwipeStats))
     }
 
     @Test
@@ -125,6 +136,40 @@ class MotionTemplateMatcherTest {
     }
 
     @Test
+    fun `test micro twitch in same direction is rejected by physical scale check`() {
+        val swipePoints = listOf(
+            Point2D(0.1f, 0.5f),
+            Point2D(0.5f, 0.5f),
+            Point2D(0.9f, 0.5f)
+        )
+        val (normPoints, stats) = TrajectoryNormalizer.normalizeTrajectory(swipePoints)!!
+        val template = MotionGestureTemplate(
+            id = "swipe_right",
+            name = "Swipe Right",
+            action = GestureAction.MEDIA_NEXT,
+            normalizedPoints = normPoints,
+            stats = stats
+        )
+
+        // Micro-twitch only 0.06 screen units long
+        val microTwitch = listOf(
+            Point2D(0.50f, 0.5f),
+            Point2D(0.53f, 0.5f),
+            Point2D(0.56f, 0.5f)
+        )
+        val (twitchNorm, twitchStats) = TrajectoryNormalizer.normalizeTrajectory(microTwitch)!!
+
+        val match = MotionTemplateMatcher.match(
+            candidateTrajectory = twitchNorm,
+            candidateStats = twitchStats,
+            templates = listOf(template),
+            rejectCeiling = 0.22f
+        )
+
+        assertNull("Micro-twitch in same direction must be rejected by physical scale check", match)
+    }
+
+    @Test
     fun `test reject ceiling rejects erratic candidate trajectories`() {
         val sCurveRaw = listOf(
             Point2D(0.1f, 0.1f),
@@ -141,7 +186,7 @@ class MotionTemplateMatcherTest {
             stats = stats
         )
 
-        // Dissimilar straight horizontal line
+        // Dissimilar straight horizontal line of proportional length
         val straightLine = listOf(
             Point2D(0.1f, 0.5f),
             Point2D(0.9f, 0.5f)

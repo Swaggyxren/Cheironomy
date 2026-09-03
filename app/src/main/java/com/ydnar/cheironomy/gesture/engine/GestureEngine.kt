@@ -99,12 +99,18 @@ class GestureEngine(
     // Timestamped trajectory buffer for custom motion matching
     private data class TimedCentroid(val point: Point2D, val timestampMs: Long)
     private val motionBuffer = ArrayDeque<TimedCentroid>()
-    private var lastMotionCheckTimeMs: Long = 0L
 
     // Anchor centroid when motion stroke begins
     private var motionAnchorPoint: Point2D? = null
     private var motionAnchorTimeMs: Long = 0L
     private var isMotionTrackingActive: Boolean = false
+
+    // Motion stroke lifecycle tracking (segmentation + completion gating)
+    private var motionStartTimeMs: Long = 0L
+    private var settledFrameCount: Int = 0
+    private var lastCentroidPoint: Point2D? = null
+    private var lastFrameTimeMs: Long = 0L
+    private var strokePeakVelocity: Float = 0f
 
     private var activeStaticTemplateId: String? = null
     private var staticTemplateStartTimeMs: Long = 0L
@@ -142,6 +148,18 @@ class GestureEngine(
 
         consecutiveHandFrames++
         val rawLandmarks = allLandmarks[0]
+
+        // Palm-scale plausibility gate: reject degenerate / hallucinated hands.
+        val palmScale = rawLandmarks[9].let { mcp ->
+            hypot(mcp.x() - rawLandmarks[0].x(), mcp.y() - rawLandmarks[0].y())
+        }
+        if (palmScale < MIN_PALM_SCALE || palmScale > MAX_PALM_SCALE) {
+            resetToIdleState()
+            _status.value = GestureEngineStatus.SCANNING
+            _recognizedGestureName.value = null
+            return
+        }
+
         val (rawCentroidX, rawCentroidY) = PalmCentroidHelper.calculatePalmCentroid(rawLandmarks)
         _telemetryRawCentroid.value = Point2D(rawCentroidX, rawCentroidY)
 
@@ -160,15 +178,34 @@ class GestureEngine(
             motionBuffer.addLast(TimedCentroid(filteredCentroidPoint, now))
             motionAnchorPoint = filteredCentroidPoint
             motionAnchorTimeMs = now
+            lastCentroidPoint = filteredCentroidPoint
+            lastFrameTimeMs = now
             return
         }
+
+        // Per-frame displacement and instant velocity calculation
+        val frameDelta = lastCentroidPoint?.let {
+            hypot(filteredCentroidX - it.x, filteredCentroidY - it.y)
+        } ?: 0f
+        val frameDtSec = if (lastFrameTimeMs > 0L) {
+            ((now - lastFrameTimeMs) / 1000f).coerceIn(0.005f, 0.2f)
+        } else {
+            0.033f
+        }
+        lastFrameTimeMs = now
+        val instantVelocity = frameDelta / frameDtSec
+        _telemetryVelocity.value = instantVelocity
+
+        val isHandStill = instantVelocity <= STILLNESS_MAX_VELOCITY
 
         // 4. Rate-Limit Safety Backstop Check (prevents physical double-fire only)
         val inSafetyWindow = (now - lastTriggerTimeMs < SAFETY_RATE_LIMIT_MS)
 
         // 5. Static Pose Classification (Nearest-Neighbor match among registered StaticGestureTemplates)
+        // MUTUAL EXCLUSION: If motion stroke is actively being tracked, bypass static pose classification
+        // to prevent erasing in-flight motion trajectories. Furthermore, require hand stillness to accumulate hold time.
         val staticTemplates = settings.customTemplates.filterIsInstance<StaticGestureTemplate>()
-        val staticMatch = if (staticTemplates.isNotEmpty()) {
+        val staticMatch = if (!isMotionTrackingActive && staticTemplates.isNotEmpty() && isHandStill) {
             StaticTemplateMatcher.match(
                 landmarks = filteredLandmarks,
                 templates = staticTemplates,
@@ -201,12 +238,13 @@ class GestureEngine(
             motionAnchorPoint = filteredCentroidPoint
             motionAnchorTimeMs = now
             isMotionTrackingActive = false
+            settledFrameCount = 0
+            lastCentroidPoint = filteredCentroidPoint
             _telemetryDeltaX.value = 0f
             _telemetryDeltaY.value = 0f
-            _telemetryVelocity.value = 0f
             return
         } else {
-            // Pose broken / released: transition from HOLDING back to IDLE immediately with 0 delay
+            // Pose broken / released / moved: transition from HOLDING back to IDLE immediately with 0 delay
             if (_gestureState.value == GestureState.HOLDING) {
                 _gestureState.value = GestureState.IDLE
                 _status.value = GestureEngineStatus.IDLE
@@ -226,61 +264,95 @@ class GestureEngine(
         val dx = filteredCentroidX - anchor.x
         val dy = filteredCentroidY - anchor.y
         val displacement = hypot(dx, dy)
-        val dtSec = ((now - motionAnchorTimeMs) / 1000f).coerceAtLeast(0.01f)
-        val velocity = displacement / dtSec
 
         _telemetryDeltaX.value = dx
         _telemetryDeltaY.value = dy
-        _telemetryVelocity.value = velocity
-
-        // Append to rolling motion buffer
-        motionBuffer.addLast(TimedCentroid(filteredCentroidPoint, now))
-        while (motionBuffer.isNotEmpty() && (now - motionBuffer.first().timestampMs > 1500L)) {
-            motionBuffer.removeFirst()
-        }
 
         val motionTemplates = settings.customTemplates.filterIsInstance<MotionGestureTemplate>()
 
-        if (displacement >= MOTION_START_THRESHOLD) {
-            isMotionTrackingActive = true
-            _gestureState.value = GestureState.TRACKING
-            _status.value = GestureEngineStatus.TRACKING
-
-            // Evaluate registered custom motion templates via Nearest-Neighbor DTW
-            if (motionTemplates.isNotEmpty() && (now - lastMotionCheckTimeMs > 80L)) {
-                lastMotionCheckTimeMs = now
-                val matchedTemplate = evaluateMotionBuffer(motionTemplates)
-                if (matchedTemplate != null && !inSafetyWindow) {
-                    dispatchRecognizedAction(GestureEvent.CustomGestureTriggered(matchedTemplate), now)
-                    return
+        if (!isMotionTrackingActive) {
+            // Intentional stroke entry gate: requires significant displacement, frame movement, and velocity
+            if (displacement >= MOTION_START_THRESHOLD && frameDelta >= MOTION_FRAME_DELTA_THRESHOLD && instantVelocity >= MOTION_START_VELOCITY) {
+                isMotionTrackingActive = true
+                motionStartTimeMs = now
+                strokePeakVelocity = instantVelocity
+                settledFrameCount = 0
+                motionBuffer.clear()
+                motionBuffer.addLast(TimedCentroid(anchor, motionAnchorTimeMs))
+                motionBuffer.addLast(TimedCentroid(filteredCentroidPoint, now))
+                lastCentroidPoint = filteredCentroidPoint
+                _gestureState.value = GestureState.TRACKING
+                _status.value = GestureEngineStatus.TRACKING
+                _recognizedGestureName.value = null
+            } else {
+                // If hand was resting or moving slowly, drift the anchor point along with the hand
+                if (frameDelta < MOTION_FRAME_DELTA_THRESHOLD || instantVelocity < STILLNESS_MAX_VELOCITY * 1.5f) {
+                    motionAnchorPoint = filteredCentroidPoint
+                    motionAnchorTimeMs = now
+                }
+                lastCentroidPoint = filteredCentroidPoint
+                if (_gestureState.value != GestureState.HOLDING) {
+                    _gestureState.value = GestureState.IDLE
+                    _status.value = GestureEngineStatus.IDLE
+                    _recognizedGestureName.value = null
                 }
             }
-        } else if (isMotionTrackingActive && displacement < MOTION_DECAY_THRESHOLD) {
-            // Motion decayed back below threshold -> return to IDLE immediately
-            isMotionTrackingActive = false
-            motionAnchorPoint = filteredCentroidPoint
-            motionAnchorTimeMs = now
-            _gestureState.value = GestureState.IDLE
-            _status.value = GestureEngineStatus.IDLE
-            _recognizedGestureName.value = null
-        } else if (!isMotionTrackingActive) {
-            // Update resting anchor
-            motionAnchorPoint = filteredCentroidPoint
-            motionAnchorTimeMs = now
-            _gestureState.value = GestureState.IDLE
-            _status.value = GestureEngineStatus.IDLE
-            _recognizedGestureName.value = null
+            return
+        }
+
+        // TRACKING active: accumulate samples for the live stroke and record peak velocity
+        strokePeakVelocity = maxOf(strokePeakVelocity, instantVelocity)
+        motionBuffer.addLast(TimedCentroid(filteredCentroidPoint, now))
+        while (motionBuffer.isNotEmpty() && (now - motionBuffer.first().timestampMs > MAX_STROKE_WINDOW_MS)) {
+            motionBuffer.removeFirst()
+        }
+        lastCentroidPoint = filteredCentroidPoint
+
+        val isSettled = frameDelta < MOTION_SETTLED_DELTA_THRESHOLD
+        settledFrameCount = if (isSettled) settledFrameCount + 1 else 0
+
+        if (settledFrameCount >= SETTLED_FRAMES_REQUIRED) {
+            val strokeDurationMs = now - motionStartTimeMs
+            val hasPeakVelocity = strokePeakVelocity >= MIN_STROKE_PEAK_VELOCITY
+            val matchedTemplate =
+                if (motionTemplates.isNotEmpty() && strokeDurationMs >= MIN_STROKE_DURATION_MS && hasPeakVelocity) {
+                    evaluateMotionBuffer(motionTemplates)
+                } else null
+
+            if (matchedTemplate != null && !inSafetyWindow) {
+                dispatchRecognizedAction(GestureEvent.CustomGestureTriggered(matchedTemplate), now)
+            } else {
+                resetMotionTracking(filteredCentroidPoint, now)
+            }
+        } else if ((now - motionStartTimeMs) > MAX_STROKE_DURATION_MS) {
+            resetMotionTracking(filteredCentroidPoint, now)
         }
     }
 
+    private fun resetMotionTracking(centroid: Point2D, now: Long) {
+        isMotionTrackingActive = false
+        motionStartTimeMs = 0L
+        strokePeakVelocity = 0f
+        settledFrameCount = 0
+        lastCentroidPoint = centroid
+        motionBuffer.clear()
+        motionAnchorPoint = centroid
+        motionAnchorTimeMs = now
+        _gestureState.value = GestureState.IDLE
+        _status.value = GestureEngineStatus.IDLE
+        _recognizedGestureName.value = null
+        _telemetryDeltaX.value = 0f
+        _telemetryDeltaY.value = 0f
+    }
+
     private fun evaluateMotionBuffer(templates: List<MotionGestureTemplate>): MotionGestureTemplate? {
-        if (motionBuffer.size < 6) return null
+        if (motionBuffer.size < MIN_MOTION_BUFFER_POINTS) return null
 
         val points = motionBuffer.map { it.point }
         val normResult = TrajectoryNormalizer.normalizeTrajectory(points) ?: return null
         val (normalizedPoints, stats) = normResult
 
-        if (stats.totalPathLength < 0.08f) return null
+        if (stats.totalPathLength < MIN_PATH_LENGTH) return null
 
         val match = MotionTemplateMatcher.match(
             candidateTrajectory = normalizedPoints,
@@ -308,11 +380,14 @@ class GestureEngine(
         activeStaticTemplateId = null
         staticTemplateStartTimeMs = 0L
         isMotionTrackingActive = false
+        motionStartTimeMs = 0L
+        strokePeakVelocity = 0f
+        settledFrameCount = 0
+        lastCentroidPoint = null
         motionBuffer.clear()
         motionAnchorPoint = null
         _telemetryDeltaX.value = 0f
         _telemetryDeltaY.value = 0f
-        _telemetryVelocity.value = 0f
 
         scope.launch {
             Log.i(TAG, "Recognized and dispatched GestureEvent: $event ($templateName)")
@@ -326,7 +401,13 @@ class GestureEngine(
         oneEuroLandmarksFilter.reset()
         motionBuffer.clear()
         motionAnchorPoint = null
+        motionAnchorTimeMs = 0L
         isMotionTrackingActive = false
+        motionStartTimeMs = 0L
+        strokePeakVelocity = 0f
+        lastFrameTimeMs = 0L
+        settledFrameCount = 0
+        lastCentroidPoint = null
         activeStaticTemplateId = null
         staticTemplateStartTimeMs = 0L
         _gestureState.value = GestureState.IDLE
@@ -340,7 +421,19 @@ class GestureEngine(
         private const val TAG = "GestureEngine"
         private const val WARMUP_FRAMES = 4             // ~120ms debounce on re-acquisition
         private const val SAFETY_RATE_LIMIT_MS = 350L    // Minimal safety rate-limit backstop against double-firing
-        private const val MOTION_START_THRESHOLD = 0.044f // Screen space displacement to enter TRACKING
-        private const val MOTION_DECAY_THRESHOLD = 0.030f // Displacement threshold below which motion settles to IDLE
+        private const val STILLNESS_MAX_VELOCITY = 0.08f // Maximum velocity (units/sec) allowed while holding a static pose
+        private const val MOTION_START_THRESHOLD = 0.12f // Screen-space displacement to enter TRACKING
+        private const val MOTION_FRAME_DELTA_THRESHOLD = 0.015f  // Per-frame movement proving a deliberate stroke
+        private const val MOTION_START_VELOCITY = 0.20f  // Minimum velocity to trigger motion tracking
+        private const val MIN_STROKE_PEAK_VELOCITY = 0.28f // Minimum peak velocity required during deliberate stroke
+        private const val MOTION_SETTLED_DELTA_THRESHOLD = 0.008f // Per-frame movement below which the stroke is settled
+        private const val SETTLED_FRAMES_REQUIRED = 3            // Consecutive settled frames before completing the stroke
+        private const val MIN_STROKE_DURATION_MS = 150L          // Minimum deliberate stroke duration
+        private const val MAX_STROKE_DURATION_MS = 1600L         // Abort stale strokes that never settle
+        private const val MAX_STROKE_WINDOW_MS = 2000L           // Rolling buffer cap while tracking
+        private const val MIN_MOTION_BUFFER_POINTS = 8            // Minimum trajectory samples before matching
+        private const val MIN_PATH_LENGTH = 0.20f                 // Minimum physical path length to spend DTW cost
+        private const val MIN_PALM_SCALE = 0.04f
+        private const val MAX_PALM_SCALE = 0.60f
     }
 }

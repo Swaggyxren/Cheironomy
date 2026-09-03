@@ -9,26 +9,25 @@ class AppSettingsTest {
     @Test
     fun `test default app settings`() {
         val settings = AppSettings()
-        assertEquals(0.5f, settings.confidenceThreshold, 0.001f)
-        assertEquals(1200L, settings.cooldownMs)
-        assertEquals(500L, settings.holdDurationMs)
+        assertEquals(0.65f, settings.confidenceThreshold, 0.001f)
+        assertEquals(700L, settings.holdDurationMs)
         assertTrue(settings.isOverlayEnabled)
-        assertEquals(GestureAction.MEDIA_PLAY_PAUSE, settings.openPalmAction)
-        assertEquals(GestureAction.SWIPE_LEFT, settings.swipeLeftAction)
-        assertEquals(GestureAction.SWIPE_RIGHT, settings.swipeRightAction)
-        assertEquals(GestureAction.SCROLL_DOWN, settings.swipeUpAction)
-        assertEquals(GestureAction.SCROLL_UP, settings.swipeDownAction)
+        assertEquals(0.11f, settings.staticRejectCeiling, 0.001f)
+        assertEquals(0.15f, settings.staticMarginThreshold, 0.001f)
+        assertEquals(0.22f, settings.motionRejectCeiling, 0.001f)
+        assertEquals(0.15f, settings.motionMarginThreshold, 0.001f)
+        assertEquals(0.40f, settings.motionPrefilterTolerance, 0.001f)
     }
 
     @Test
-    fun `test custom action assignment`() {
+    fun `test custom nearest-neighbor threshold assignment`() {
         val settings = AppSettings(
-            openPalmAction = GestureAction.NONE,
-            swipeLeftAction = GestureAction.MEDIA_PREVIOUS,
-            swipeRightAction = GestureAction.MEDIA_NEXT
+            confidenceThreshold = 0.80f,
+            staticRejectCeiling = 0.12f,
+            motionRejectCeiling = 0.16f
         )
-        assertEquals(GestureAction.NONE, settings.openPalmAction)
-        assertEquals(GestureAction.MEDIA_PREVIOUS, settings.swipeLeftAction)
-        assertEquals(GestureAction.MEDIA_NEXT, settings.swipeRightAction)
+        assertEquals(0.80f, settings.confidenceThreshold, 0.001f)
+        assertEquals(0.12f, settings.staticRejectCeiling, 0.001f)
+        assertEquals(0.16f, settings.motionRejectCeiling, 0.001f)
     }
 }
