@@ -118,21 +118,29 @@ class HandLandmarkerHelper(
 
         imageProxy.use {
             val bitmap = imageProxy.toBitmap()
-            val matrix = Matrix().apply {
-                postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+            val finalBitmap = if (rotationDegrees != 0) {
+                val matrix = Matrix().apply {
+                    postRotate(rotationDegrees.toFloat())
+                }
+                val rotated = Bitmap.createBitmap(
+                    bitmap,
+                    0,
+                    0,
+                    bitmap.width,
+                    bitmap.height,
+                    matrix,
+                    true
+                )
+                if (rotated !== bitmap) {
+                    bitmap.recycle()
+                }
+                rotated
+            } else {
+                bitmap
             }
 
-            val rotatedBitmap = Bitmap.createBitmap(
-                bitmap,
-                0,
-                0,
-                bitmap.width,
-                bitmap.height,
-                matrix,
-                true
-            )
-
-            val mpImage = BitmapImageBuilder(rotatedBitmap).build()
+            val mpImage = BitmapImageBuilder(finalBitmap).build()
             handLandmarker?.detectAsync(mpImage, frameTime)
         }
     }

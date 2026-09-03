@@ -70,6 +70,9 @@ class CheironomyForegroundService : Service(), LifecycleOwner {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
+        private val _activeEngine = MutableStateFlow<GestureEngine?>(null)
+        val activeEngine: StateFlow<GestureEngine?> = _activeEngine.asStateFlow()
+
         fun start(context: Context) {
             val intent = Intent(context, CheironomyForegroundService::class.java).apply {
                 action = ACTION_START
@@ -96,6 +99,7 @@ class CheironomyForegroundService : Service(), LifecycleOwner {
         mediaDispatcher = MediaActionDispatcher(this)
         overlayManager = FloatingOverlayManager(this)
         gestureEngine = GestureEngine(serviceScope, settingsRepo.settings.value)
+        _activeEngine.value = gestureEngine
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -262,6 +266,7 @@ class CheironomyForegroundService : Service(), LifecycleOwner {
 
     private fun stopForegroundService() {
         _isRunning.value = false
+        _activeEngine.value = null
         overlayManager.hide()
         handLandmarkerHelper?.clearHandLandmarker()
         cameraProvider?.unbindAll()
@@ -310,6 +315,7 @@ class CheironomyForegroundService : Service(), LifecycleOwner {
     override fun onDestroy() {
         super.onDestroy()
         _isRunning.value = false
+        _activeEngine.value = null
         overlayManager.hide()
         handLandmarkerHelper?.clearHandLandmarker()
         cameraProvider?.unbindAll()

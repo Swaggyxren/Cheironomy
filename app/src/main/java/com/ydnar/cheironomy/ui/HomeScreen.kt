@@ -170,14 +170,17 @@ private fun DashboardTab(
     var liveConfidence by remember { mutableStateOf(0f) }
 
     val appSettings by settingsRepo.settings.collectAsStateWithLifecycle()
-    val gestureEngine = remember { GestureEngine(settings = appSettings) }
-    val gestureStatus by gestureEngine.status.collectAsStateWithLifecycle()
-    val gestureState by gestureEngine.gestureState.collectAsStateWithLifecycle()
-    val recognizedName by gestureEngine.recognizedGestureName.collectAsStateWithLifecycle()
-    val rawCentroid by gestureEngine.telemetryRawCentroid.collectAsStateWithLifecycle()
-    val filteredCentroid by gestureEngine.telemetryFilteredCentroid.collectAsStateWithLifecycle()
-    val deltaX by gestureEngine.telemetryDeltaX.collectAsStateWithLifecycle()
-    val deltaY by gestureEngine.telemetryDeltaY.collectAsStateWithLifecycle()
+    val serviceEngine by CheironomyForegroundService.activeEngine.collectAsStateWithLifecycle()
+    val localEngine = remember { GestureEngine(settings = appSettings) }
+    val effectiveEngine = serviceEngine ?: localEngine
+
+    val gestureStatus by effectiveEngine.status.collectAsStateWithLifecycle()
+    val gestureState by effectiveEngine.gestureState.collectAsStateWithLifecycle()
+    val recognizedName by effectiveEngine.recognizedGestureName.collectAsStateWithLifecycle()
+    val rawCentroid by effectiveEngine.telemetryRawCentroid.collectAsStateWithLifecycle()
+    val filteredCentroid by effectiveEngine.telemetryFilteredCentroid.collectAsStateWithLifecycle()
+    val deltaX by effectiveEngine.telemetryDeltaX.collectAsStateWithLifecycle()
+    val deltaY by effectiveEngine.telemetryDeltaY.collectAsStateWithLifecycle()
 
     // Permission States
     var hasCameraPermission by remember {
@@ -331,8 +334,8 @@ private fun DashboardTab(
                             inferenceLatencyMs = bundle.inferenceTimeMs
                             liveFps = bundle.fps
                             liveConfidence = bundle.confidence
-                            gestureEngine.updateSettings(appSettings)
-                            gestureEngine.processFrame(bundle)
+                            effectiveEngine.updateSettings(appSettings)
+                            effectiveEngine.processFrame(bundle)
                         }
                     )
 
